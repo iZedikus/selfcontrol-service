@@ -51,6 +51,7 @@ public class AuthService {
         RefreshToken old = tokens.findByTokenHash(hash).orElseThrow(() -> new IllegalArgumentException("Unknown refresh token"));
         if (old.isRevoked() || old.getExpiresAt().isBefore(Instant.now()))
             throw new IllegalStateException("Refresh token expired or revoked");
+        if (old.getUser().getStatus() != UserStatus.Active) throw new IllegalStateException("User is not active");
         old.setRevoked(true);
         return issue(old.getUser());
     }
