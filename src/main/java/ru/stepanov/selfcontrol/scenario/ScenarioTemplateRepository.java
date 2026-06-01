@@ -13,4 +13,7 @@ public interface ScenarioTemplateRepository extends JpaRepository<ScenarioTempla
 
     @Query("select distinct t from ScenarioTemplate t join t.mccCodes mcc where mcc in :mccCodes")
     List<ScenarioTemplate> findByAnyMccCode(@Param("mccCodes") Collection<String> mccCodes);
+
+    @Query("select distinct t from ScenarioTemplate t join t.mccCodes mcc where mcc in :mccCodes and t.scenarioId <> :scenarioId")
+    List<ScenarioTemplate> findByAnyMccCodeAndScenarioIdNot(@Param("mccCodes") Collection<String> mccCodes, @Param("scenarioId") UUID scenarioId);
 }
