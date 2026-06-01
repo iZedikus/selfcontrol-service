@@ -1,0 +1,690 @@
+# СПЕЦИФИКАЦИЯ ИНТЕГРАЦИИ ЧЕРЕЗ RABBITMQ
+# Система безакцептных списаний — контракт взаимодействия сервисов
+# Версия: 1.0.0
+# Дата: 2026-06-01
+#
+# Назначение документа:
+#   Данный файл является единственным источником истины (Single Source of Truth)
+#   для всех участников разработки. Каждый сервис должен строго соответствовать
+#   описанным здесь контрактам. Любые изменения требуют обновления этого файла
+#   и согласования со всеми затронутыми командами.
+#
+# Сервисы-участники:
+#   SIMULACRUM   — имитатор Open API Банка России              (порт 8081)
+#   ORACLE       — сервис мониторинга транзакций               (порт 8082, нет публичного API)
+#   IS           — основная информационная система             (порт 8080)
+#
+# Инфраструктура:
+#   RabbitMQ 3.13+, порт AMQP: 5672, Management UI: 15672
+#   Все exchange — durable: true, auto-delete: false
+#   Все очереди  — durable: true, auto-delete: false, exclusive: false
+#   Сериализация — JSON (Jackson), charset: UTF-8
+#   Формат дат   — ISO-8601: "2026-05-25T10:00:00.000Z"
+#   UUID         — строковый формат: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+#   Деньги       — строка с двумя знаками после запятой: "350.00" (не float/double)
+#   Валюта       — ISO 4217, три символа: "RUB", "USD", "EUR"
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# РАЗДЕЛ 1. ТОПОЛОГИЯ: EXCHANGES
+# ───────────────────────────────────────────────────────────────────────────────
+#
+# Правило именования: {владелец}.{домен}.events
+# Владелец exchange = сервис-издатель. Только он объявляет и публикует.
+# Подписчики объявляют свои очереди и bindings самостоятельно.
+
+exchanges:
+  simulacrum.events:
+    type: topic
+    owner: SIMULACRUM        # только SIMULACRUM публикует сюда
+    durable: true
+    description: >
+      Исходящие события сервиса Симулякр. Транзакционные события,
+      которые Симулякр сгенерировал (по запросу администратора)
+      либо обработал (списание от ИС).
+
+  oracle.events:
+    type: topic
+    owner: ORACLE            # только ORACLE публикует сюда
+    durable: true
+    description: >
+      Исходящие события сервиса Оракул. Результаты сопоставления
+      транзакций с пользовательскими правилами.
+
+  is.events:
+    type: topic
+    owner: IS                # только IS публикует сюда
+    durable: true
+    description: >
+      Исходящие события основной информационной системы. Команды
+      синхронизации профилей для Оракула, результаты обработки
+      сценариев (для логирования, уведомлений).
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# РАЗДЕЛ 2. ТОПОЛОГИЯ: ОЧЕРЕДИ И BINDINGS
+# ───────────────────────────────────────────────────────────────────────────────
+
+queues:
+
+  # ── ORACLE принимает транзакции от SIMULACRUM ────────────────────────────
+  oracle.inbox:
+    owner: ORACLE            # ORACLE объявляет эту очередь
+    bound_to: simulacrum.events
+    routing_key: "transaction.created"
+    durable: true
+    arguments:
+      x-dead-letter-exchange: "simulacrum.events.dlx"
+      x-dead-letter-routing-key: "transaction.created.dead"
+      x-message-ttl: 86400000   # 24 часа, ms
+    description: >
+      Входящие транзакционные события от Симулякра.
+      При невозможности обработать сообщение (исключение в @RabbitListener)
+      Spring AMQP отправляет его в DLQ после исчерпания retry.
+
+  oracle.inbox.dlq:
+    owner: ORACLE
+    bound_to: "simulacrum.events.dlx"
+    routing_key: "transaction.created.dead"
+    durable: true
+    description: Dead-letter queue для oracle.inbox. Мониторинг обязателен.
+
+  # ── ORACLE принимает команды синхронизации профилей от IS ────────────────
+  oracle.profile:
+    owner: ORACLE
+    bound_to: is.events
+    routing_key: "scenario.profile.sync"
+    durable: true
+    arguments:
+      x-dead-letter-exchange: "is.events.dlx"
+      x-dead-letter-routing-key: "scenario.profile.sync.dead"
+    description: >
+      Команды синхронизации WatchProfile: регистрация пользователя
+      на наблюдение, обновление правил, пауза, завершение.
+
+  oracle.profile.dlq:
+    owner: ORACLE
+    bound_to: "is.events.dlx"
+    routing_key: "scenario.profile.sync.dead"
+    durable: true
+
+  # ── IS принимает события срабатывания от ORACLE ──────────────────────────
+  is.trigger.inbox:
+    owner: IS
+    bound_to: oracle.events
+    routing_key: "trigger.matched"
+    durable: true
+    arguments:
+      x-dead-letter-exchange: "oracle.events.dlx"
+      x-dead-letter-routing-key: "trigger.matched.dead"
+    description: >
+      Событие срабатывания сценария. IS обрабатывает его в
+      HandleTriggerEventUseCase, создаёт ScenarioExecution
+      и инициирует DebitOperation.
+
+  is.trigger.inbox.dlq:
+    owner: IS
+    bound_to: "oracle.events.dlx"
+    routing_key: "trigger.matched.dead"
+    durable: true
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# РАЗДЕЛ 3. СХЕМЫ СООБЩЕНИЙ
+# ───────────────────────────────────────────────────────────────────────────────
+# Для каждого сообщения указаны:
+#   routing_key  — ключ маршрутизации в exchange владельца
+#   publisher    — сервис-издатель
+#   consumers    — сервисы-подписчики
+#   fields       — поля с типами и ограничениями
+#   example      — пример корректного JSON
+
+messages:
+
+  # ════════════════════════════════════════════════════════════════
+  # MSG-001 · TransactionCreatedMessage
+  # ════════════════════════════════════════════════════════════════
+  TransactionCreatedMessage:
+    exchange: simulacrum.events
+    routing_key: "transaction.created"
+    publisher: SIMULACRUM
+    consumers: [ORACLE]
+    trigger: >
+      Публикуется SIMULACRUM при вызове административного эндпоинта
+      POST /api/v1/admin/accounts/{accountId}/transactions/generate.
+    fields:
+      messageId:
+        type: string (UUID)
+        required: true
+        description: Уникальный идентификатор сообщения. Используется для идемпотентности.
+      occurredAt:
+        type: string (ISO-8601)
+        required: true
+        description: Момент публикации события.
+      transactionId:
+        type: string
+        required: true
+        constraints: "не пустая, уникальная в рамках симулякра"
+        description: Идентификатор транзакции, присвоенный симулякром.
+      accountId:
+        type: string
+        required: true
+        description: Идентификатор счёта в симулякре (account.account_id).
+      paymentToken:
+        type: string
+        required: true
+        description: >
+          Платёжный токен счёта. ORACLE использует его для поиска WatchProfile.
+          Должен совпадать со значением, переданным IS при регистрации профиля
+          в ProfileSyncMessage.paymentToken.
+      amount:
+        type: string (decimal)
+        required: true
+        example: "350.00"
+        constraints: "ровно два знака после запятой, > 0"
+      currency:
+        type: string (ISO-4217)
+        required: true
+        example: "RUB"
+      creditDebitIndicator:
+        type: string (enum)
+        required: true
+        values: ["Credit", "Debit"]
+      bookingDateTime:
+        type: string (ISO-8601)
+        required: true
+      valueDateTime:
+        type: string (ISO-8601)
+        required: false
+      merchantName:
+        type: string
+        required: false
+        constraints: "max 140 символов"
+        description: Наименование торговца. Может быть null для нетоварных операций.
+      merchantId:
+        type: string
+        required: false
+        constraints: "max 35 символов"
+      mccCode:
+        type: integer
+        required: false
+        constraints: "4-значное число, диапазон 0000–9999"
+        description: >
+          Merchant Category Code. Ключевое поле для сценария «Нежелательные покупки».
+          ORACLE сопоставляет это поле с условиями ActiveRule типа RuleField.MccCode.
+      debtorName:
+        type: string
+        required: false
+        constraints: "max 140 символов"
+      creditorName:
+        type: string
+        required: false
+        constraints: "max 140 символов"
+    example: |
+      {
+        "messageId": "a1b2c3d4-0000-0000-0000-111111111111",
+        "occurredAt": "2026-05-25T10:00:00.000Z",
+        "transactionId": "TX-2026-001",
+        "accountId": "ACC-TEST-001",
+        "paymentToken": "token-abc-xyz",
+        "amount": "350.00",
+        "currency": "RUB",
+        "creditDebitIndicator": "Debit",
+        "bookingDateTime": "2026-05-25T10:00:00.000Z",
+        "valueDateTime": "2026-05-25T10:00:00.000Z",
+        "merchantName": "Табакoff ООО",
+        "merchantId": "MERCH-777",
+        "mccCode": 5912,
+        "debtorName": "Иванов Иван Иванович",
+        "creditorName": "Табакoff ООО"
+      }
+    error_handling: |
+      ORACLE: при ошибке десериализации или бизнес-логики бросить исключение →
+      Spring AMQP выполнит retry (3 попытки, интервал 2с) →
+      при исчерпании отправить в oracle.inbox.dlq.
+      Повторная обработка одного transactionId должна быть идемпотентна:
+      проверять наличие IncomingTransaction с этим transactionId в БД.
+
+
+  # ════════════════════════════════════════════════════════════════
+  # MSG-002 · ProfileSyncMessage
+  # ════════════════════════════════════════════════════════════════
+  ProfileSyncMessage:
+    exchange: is.events
+    routing_key: "scenario.profile.sync"
+    publisher: IS
+    consumers: [ORACLE]
+    trigger: >
+      Публикуется IS при активации, деактивации, изменении настроек
+      сценария пользователем, либо при отзыве акцепта.
+    fields:
+      messageId:
+        type: string (UUID)
+        required: true
+      occurredAt:
+        type: string (ISO-8601)
+        required: true
+      action:
+        type: string (enum)
+        required: true
+        values: ["REGISTER", "UPDATE_RULES", "PAUSE", "TERMINATE"]
+        description: |
+          REGISTER    — первичная регистрация: создать WatchProfile + ActiveRule.
+          UPDATE_RULES — обновить условия существующего правила (rules + ruleVersion).
+          PAUSE       — приостановить наблюдение (WatchProfileStatus.Paused).
+          TERMINATE   — прекратить наблюдение и удалить правила.
+      externalUserId:
+        type: string (UUID)
+        required: true
+        description: ID пользователя в IS. ORACLE хранит как WatchProfile.externalUserId.
+      externalUserScenarioId:
+        type: string (UUID)
+        required: true
+        description: >
+          ID активного сценария в IS (UserScenario.userScenarioId).
+          ORACLE хранит как ActiveRule.externalUserScenarioId.
+          Это поле возвращается обратно в TriggerEventMessage для маршрутизации
+          в IS при срабатывании.
+      scenarioTypeCode:
+        type: string
+        required: true
+        example: "UNDESIRABLE_PURCHASE"
+        description: >
+          Код типа сценария. Используется ORACLE для логирования и
+          включается в TriggerEventMessage.scenarioTypeCode.
+      paymentToken:
+        type: string
+        required: true (для REGISTER)
+        description: >
+          Токен счёта пользователя для наблюдения.
+          Должен совпадать с paymentToken в TransactionCreatedMessage
+          для корректного сопоставления транзакций.
+      bankBic:
+        type: string
+        required: true (для REGISTER)
+        constraints: "BIC банка, 8 или 11 символов"
+      ruleVersion:
+        type: integer
+        required: true (для REGISTER, UPDATE_RULES)
+        description: >
+          Версия набора правил. ORACLE хранит в ActiveRule.version.
+          При получении UPDATE_RULES с ruleVersion <= текущей версии
+          сообщение игнорируется (защита от out-of-order delivery).
+      rules:
+        type: array of RuleDto
+        required: true (для REGISTER, UPDATE_RULES)
+        description: Полный новый набор условий. Заменяет предыдущие conditions целиком.
+        items:
+          field:
+            type: string (enum)
+            values: ["MccCode", "MerchantName", "MerchantId", "CreditDebitIndicator", "Currency"]
+          operator:
+            type: string (enum)
+            values: ["Equals", "NotEquals", "Contains", "In", "GreaterThan", "LessThan"]
+          value:
+            type: string
+            description: >
+              Для оператора In — значения через запятую без пробелов: "5912,5813,5994".
+              Для числовых полей (MccCode) — строковое представление числа: "5912".
+              Для CreditDebitIndicator — одно из значений: "Credit" или "Debit".
+      debitConfig:
+        type: object
+        required: true (для REGISTER, UPDATE_RULES)
+        description: Конфигурация списания, которую ORACLE включает в TriggerEventMessage.
+        fields:
+          debitAmount:
+            type: string (decimal)
+            example: "200.00"
+          currency:
+            type: string (ISO-4217)
+          recipientPaymentToken:
+            type: string
+            description: Токен счёта-получателя (благотворительный фонд и т.п.)
+          consentId:
+            type: string (UUID)
+          sourceAccountId:
+            type: string (UUID)
+    example: |
+      {
+        "messageId": "b2c3d4e5-0000-0000-0000-222222222222",
+        "occurredAt": "2026-05-25T09:55:00.000Z",
+        "action": "REGISTER",
+        "externalUserId": "user-uuid-0001",
+        "externalUserScenarioId": "scenario-uuid-0001",
+        "scenarioTypeCode": "UNDESIRABLE_PURCHASE",
+        "paymentToken": "token-abc-xyz",
+        "bankBic": "044525974",
+        "ruleVersion": 1,
+        "rules": [
+          { "field": "MccCode", "operator": "In", "value": "5912,5813,5994" },
+          { "field": "CreditDebitIndicator", "operator": "Equals", "value": "Debit" }
+        ],
+        "debitConfig": {
+          "debitAmount": "200.00",
+          "currency": "RUB",
+          "recipientPaymentToken": "charity-token-xyz",
+          "consentId": "consent-uuid-0001",
+          "sourceAccountId": "account-uuid-0001"
+        }
+      }
+    error_handling: |
+      ORACLE: неизвестный action → залогировать WARNING, сообщение подтвердить (ack).
+      ORACLE: REGISTER для уже существующего externalUserScenarioId → UPDATE_RULES.
+      ORACLE: UPDATE_RULES с ruleVersion <= текущей → игнорировать, ack.
+      ORACLE: TERMINATE для несуществующего профиля → игнорировать, ack.
+
+
+  # ════════════════════════════════════════════════════════════════
+  # MSG-003 · TriggerEventMessage
+  # ════════════════════════════════════════════════════════════════
+  TriggerEventMessage:
+    exchange: oracle.events
+    routing_key: "trigger.matched"
+    publisher: ORACLE
+    consumers: [IS]
+    trigger: >
+      Публикуется ORACLE при обнаружении совпадения транзакции
+      с хотя бы одним активным правилом WatchProfile пользователя.
+      Публикуется по одному сообщению на каждое сработавшее правило.
+    fields:
+      messageId:
+        type: string (UUID)
+        required: true
+      occurredAt:
+        type: string (ISO-8601)
+        required: true
+        description: Момент срабатывания правила в ORACLE.
+      triggerEventId:
+        type: string (UUID)
+        required: true
+        description: >
+          ID события в БД ORACLE (TriggerEvent.triggerEventId).
+          IS использует для подтверждения доставки (если реализовано).
+      externalUserScenarioId:
+        type: string (UUID)
+        required: true
+        description: >
+          Значение из ProfileSyncMessage.externalUserScenarioId.
+          IS использует для поиска UserScenario и запуска HandleTriggerEventUseCase.
+      externalUserId:
+        type: string (UUID)
+        required: true
+        description: Значение из ProfileSyncMessage.externalUserId.
+      triggerTransactionId:
+        type: string
+        required: true
+        description: transactionId из TransactionCreatedMessage, вызвавшего срабатывание.
+      matchedMcc:
+        type: string
+        required: false
+        description: Значение mccCode транзакции (строка). null если MCC не участвовал в условии.
+      matchedMerchantName:
+        type: string
+        required: false
+        description: merchantName транзакции. null если не участвовал.
+      matchedAmount:
+        type: string (decimal)
+        required: true
+        description: Сумма транзакции, вызвавшей срабатывание.
+      matchedCurrency:
+        type: string (ISO-4217)
+        required: true
+      scenarioTypeCode:
+        type: string
+        required: true
+        example: "UNDESIRABLE_PURCHASE"
+        description: >
+          Значение из ProfileSyncMessage.scenarioTypeCode.
+          IS использует для диспетчеризации к нужному ScenarioPlugin.
+      debitConfig:
+        type: object
+        required: true
+        description: >
+          Копия debitConfig из ProfileSyncMessage на момент срабатывания.
+          IS использует для инициирования DebitOperation без обращения к БД профиля.
+        fields:
+          debitAmount:
+            type: string (decimal)
+          currency:
+            type: string (ISO-4217)
+          recipientPaymentToken:
+            type: string
+          consentId:
+            type: string (UUID)
+          sourceAccountId:
+            type: string (UUID)
+    example: |
+      {
+        "messageId": "c3d4e5f6-0000-0000-0000-333333333333",
+        "occurredAt": "2026-05-25T10:00:05.000Z",
+        "triggerEventId": "trigger-uuid-0001",
+        "externalUserScenarioId": "scenario-uuid-0001",
+        "externalUserId": "user-uuid-0001",
+        "triggerTransactionId": "TX-2026-001",
+        "matchedMcc": "5912",
+        "matchedMerchantName": "Табакoff ООО",
+        "matchedAmount": "350.00",
+        "matchedCurrency": "RUB",
+        "scenarioTypeCode": "UNDESIRABLE_PURCHASE",
+        "debitConfig": {
+          "debitAmount": "200.00",
+          "currency": "RUB",
+          "recipientPaymentToken": "charity-token-xyz",
+          "consentId": "consent-uuid-0001",
+          "sourceAccountId": "account-uuid-0001"
+        }
+      }
+    error_handling: |
+      IS: ошибка при создании ScenarioExecution → бросить исключение →
+      retry (3 попытки, интервал 2с) → DLQ is.trigger.inbox.dlq.
+      IS: externalUserScenarioId не найден → залогировать WARNING, ack
+      (сценарий мог быть деактивирован между публикацией и обработкой).
+      IS: повторная обработка одного triggerEventId → идемпотентна:
+      проверять наличие ScenarioExecution с этим triggerEventId в БД.
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# РАЗДЕЛ 4. МАТРИЦА ВЗАИМОДЕЙСТВИЙ
+# ───────────────────────────────────────────────────────────────────────────────
+#
+#  Издатель   │ Exchange            │ Routing key              │ Подписчик
+# ────────────┼─────────────────────┼──────────────────────────┼───────────
+#  SIMULACRUM │ simulacrum.events   │ transaction.created      │ ORACLE
+#  IS         │ is.events           │ scenario.profile.sync    │ ORACLE
+#  ORACLE     │ oracle.events       │ trigger.matched          │ IS
+#
+# Прямая связь SIMULACRUM ↔ IS через очереди ОТСУТСТВУЕТ.
+# SIMULACRUM и IS взаимодействуют только через REST (см. отдельную спецификацию).
+# ORACLE не имеет исходящих REST-вызовов.
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# РАЗДЕЛ 5. КОНФИГУРАЦИЯ SPRING AMQP (эталонная)
+# ───────────────────────────────────────────────────────────────────────────────
+# Каждый сервис должен объявить свои очереди и bindings при старте.
+# Объявление идемпотентно: если exchange/queue уже существует с теми же
+# параметрами — ошибки не будет. При конфликте параметров RabbitMQ вернёт 406.
+
+spring_amqp_config:
+
+  SIMULACRUM:
+    declares:
+      - TopicExchange("simulacrum.events", durable=true, autoDelete=false)
+      - TopicExchange("simulacrum.events.dlx", durable=true, autoDelete=false)
+    publishes:
+      - exchange: simulacrum.events
+        routing_key: transaction.created
+        message_type: TransactionCreatedMessage
+    note: >
+      SIMULACRUM НЕ объявляет oracle.inbox — это ответственность ORACLE.
+      SIMULACRUM не знает о существовании ORACLE.
+
+  ORACLE:
+    declares:
+      - TopicExchange("simulacrum.events", durable=true)    # только объявляет, не публикует
+      - TopicExchange("is.events", durable=true)            # только объявляет, не публикует
+      - TopicExchange("oracle.events", durable=true, autoDelete=false)
+      - TopicExchange("oracle.events.dlx", durable=true, autoDelete=false)
+      - Queue("oracle.inbox", durable=true, args={x-dead-letter-exchange: simulacrum.events.dlx, ...})
+      - Queue("oracle.inbox.dlq", durable=true)
+      - Queue("oracle.profile", durable=true, args={x-dead-letter-exchange: is.events.dlx, ...})
+      - Queue("oracle.profile.dlq", durable=true)
+      - Binding(oracle.inbox → simulacrum.events, routing_key=transaction.created)
+      - Binding(oracle.profile → is.events, routing_key=scenario.profile.sync)
+    publishes:
+      - exchange: oracle.events
+        routing_key: trigger.matched
+        message_type: TriggerEventMessage
+    listens:
+      - queue: oracle.inbox       → TransactionConsumer.handle(TransactionCreatedMessage)
+      - queue: oracle.profile     → ProfileSyncConsumer.handle(ProfileSyncMessage)
+
+  IS:
+    declares:
+      - TopicExchange("oracle.events", durable=true)        # только объявляет, не публикует
+      - TopicExchange("is.events", durable=true, autoDelete=false)
+      - TopicExchange("is.events.dlx", durable=true, autoDelete=false)
+      - Queue("is.trigger.inbox", durable=true, args={x-dead-letter-exchange: oracle.events.dlx, ...})
+      - Queue("is.trigger.inbox.dlq", durable=true)
+      - Binding(is.trigger.inbox → oracle.events, routing_key=trigger.matched)
+    publishes:
+      - exchange: is.events
+        routing_key: scenario.profile.sync
+        message_type: ProfileSyncMessage
+    listens:
+      - queue: is.trigger.inbox   → TriggerEventConsumer.handle(TriggerEventMessage)
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# РАЗДЕЛ 6. ПРАВИЛА ИДЕМПОТЕНТНОСТИ И ОБРАБОТКИ ОШИБОК
+# ───────────────────────────────────────────────────────────────────────────────
+
+idempotency:
+  general_rule: >
+    Каждый потребитель ОБЯЗАН обеспечивать идемпотентную обработку сообщений.
+    RabbitMQ гарантирует at-least-once delivery: одно и то же сообщение
+    может быть доставлено более одного раза (при requeue после ошибки).
+
+  ORACLE / TransactionCreatedMessage:
+    key: transactionId
+    check: >
+      При получении сообщения проверить наличие IncomingTransaction
+      с transactionId в БД. Если существует — залогировать WARN
+      "Duplicate transaction {transactionId}, skipping" и вернуть ack.
+
+  ORACLE / ProfileSyncMessage:
+    key: (externalUserScenarioId, action, ruleVersion)
+    check: >
+      При UPDATE_RULES: если ruleVersion в сообщении <= ActiveRule.version в БД —
+      игнорировать. Это защита от повторной доставки устаревшего сообщения.
+
+  IS / TriggerEventMessage:
+    key: triggerEventId
+    check: >
+      При получении сообщения проверить наличие ScenarioExecution
+      с triggerEventId в БД. Если существует — ack без обработки.
+
+retry_policy:
+  default:
+    max_attempts: 3
+    initial_interval_ms: 2000
+    multiplier: 2.0           # exponential backoff: 2с, 4с, 8с
+    after_exhausted: send_to_dlq
+  spring_config: |
+    spring:
+      rabbitmq:
+        listener:
+          simple:
+            acknowledge-mode: auto
+            retry:
+              enabled: true
+              max-attempts: 3
+              initial-interval: 2000
+              multiplier: 2.0
+              max-interval: 10000
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# РАЗДЕЛ 7. СКВОЗНОЙ СЦЕНАРИЙ (ПРИМЕР ПОЛНОГО ПОТОКА)
+# ───────────────────────────────────────────────────────────────────────────────
+#
+# Предусловие: пользователь активировал сценарий "UNDESIRABLE_PURCHASE" в IS.
+#
+# ШАГ 1  IS публикует ProfileSyncMessage (action=REGISTER) в is.events
+# ШАГ 2  ORACLE получает его из oracle.profile, создаёт WatchProfile + ActiveRule
+#
+# ШАГ 3  Администратор вызывает POST /api/v1/admin/accounts/ACC-001/transactions/generate
+#         с { mccCode: 5912, amount: "350.00", currency: "RUB", creditDebitIndicator: "Debit" }
+# ШАГ 4  SIMULACRUM создаёт TransactionHistory, публикует TransactionCreatedMessage
+#         в simulacrum.events [transaction.created]
+#
+# ШАГ 5  ORACLE получает сообщение из oracle.inbox
+# ШАГ 6  ORACLE находит WatchProfile по paymentToken
+# ШАГ 7  ORACLE вычисляет RuleCondition:
+#           MccCode In [5912, 5813, 5994] → 5912 ∈ список → PASS
+#           CreditDebitIndicator Equals "Debit" → "Debit" = "Debit" → PASS
+#           Правило сработало.
+# ШАГ 8  ORACLE создаёт TriggerEvent, публикует TriggerEventMessage
+#         в oracle.events [trigger.matched]
+#
+# ШАГ 9  IS получает сообщение из is.trigger.inbox
+# ШАГ 10 IS вызывает HandleTriggerEventUseCase:
+#           - загружает UserScenario по externalUserScenarioId
+#           - создаёт ScenarioExecution
+#           - вызывает ScenarioPlugin("UNDESIRABLE_PURCHASE").evaluate()
+#           - инициирует DebitOperation
+# ШАГ 11 IS вызывает POST http://simulacrum:8081/api/v1/payments/debit (REST)
+# ШАГ 12 IS получает ответ, обновляет статус DebitOperation
+# ШАГ 13 IS публикует DebitCompletedEvent в is.events (для уведомлений/аудита)
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# РАЗДЕЛ 8. КОНТРАКТ СВЯЗАННОСТИ ПОЛЕЙ МЕЖДУ СООБЩЕНИЯМИ
+# ───────────────────────────────────────────────────────────────────────────────
+#
+# Поля, которые ДОЛЖНЫ содержать одинаковые значения в разных сообщениях.
+# Нарушение этих инвариантов приведёт к потере сообщений или некорректной обработке.
+#
+#  TransactionCreatedMessage.paymentToken
+#    == ProfileSyncMessage.paymentToken
+#    (ORACLE сопоставляет транзакцию с профилем именно по этому полю)
+#
+#  ProfileSyncMessage.externalUserScenarioId
+#    == TriggerEventMessage.externalUserScenarioId
+#    (IS ищет UserScenario по этому полю при получении триггера)
+#
+#  ProfileSyncMessage.externalUserId
+#    == TriggerEventMessage.externalUserId
+#    (IS использует для контекста при создании ScenarioExecution)
+#
+#  ProfileSyncMessage.debitConfig
+#    ⊆ TriggerEventMessage.debitConfig
+#    (ORACLE копирует debitConfig из профиля в событие без изменений)
+#
+#  TriggerEventMessage.triggerTransactionId
+#    == TransactionCreatedMessage.transactionId
+#    (IS сохраняет в ScenarioExecution.triggerSnapshot для аудита)
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# РАЗДЕЛ 9. ВЕРСИОНИРОВАНИЕ КОНТРАКТА
+# ───────────────────────────────────────────────────────────────────────────────
+
+versioning:
+  current_version: "1.0.0"
+  strategy: >
+    Обратно совместимые изменения (добавление необязательных полей) —
+    минорная версия. Несовместимые изменения (удаление/переименование полей,
+    смена типа, изменение семантики) — мажорная версия с параллельной
+    поддержкой старого контракта на период миграции.
+  header: >
+    При публикации сообщения РЕКОМЕНДУЕТСЯ добавлять заголовок RabbitMQ:
+    x-contract-version: "1.0.0"
+    Потребители могут использовать его для маршрутизации на нужный десериализатор.
+  breaking_change_process:
+    1: Обновить этот файл, согласовать со всеми командами.
+    2: Развернуть новую версию потребителя, способную обрабатывать оба формата.
+    3: Развернуть новую версию издателя.
+    4: Убедиться, что старые сообщения из очередей обработаны.
+    5: Удалить поддержку старого формата из потребителя.

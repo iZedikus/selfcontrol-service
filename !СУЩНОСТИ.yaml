@@ -1,0 +1,614 @@
+# Модель сущностей информационной системы (ИС) для модуля "Нежелательные покупки"
+
+version: "1.0"
+description: "Сущности сервиса анализа истории покупок с поддержкой плагинов сценариев. Модуль 'Нежелательные покупки' является одним из сценариев."
+
+domains:
+  - name: Identity
+    entities:
+      - name: User
+        primaryKey: userID
+        attributes:
+          - name: userID
+            type: UUID
+            required: true
+          - name: role
+            type: ref(UserRole)
+            required: true
+          - name: status
+            type: ref(UserStatus)
+            required: true
+          - name: createdAt
+            type: Instant
+            required: true
+          - name: updatedAt
+            type: Instant
+          - name: lastLoginAt
+            type: Instant
+        relationships:
+          - type: composition
+            to: Email
+            cardinality: "1"
+          - type: composition
+            to: PasswordHash
+            cardinality: "1"
+          - type: composition
+            to: PhoneNumber
+            cardinality: "1"
+          - type: composition
+            to: RefreshToken
+            cardinality: "*"
+
+      - name: Email
+        primaryKey: (встроен в User)
+        attributes:
+          - name: value
+            type: String
+            required: true
+
+      - name: PasswordHash
+        primaryKey: (встроен)
+        attributes:
+          - name: value
+            type: String
+
+      - name: PhoneNumber
+        primaryKey: (встроен)
+        attributes:
+          - name: value
+            type: String
+
+      - name: UserRole
+        kind: enum
+        values: [User, Admin]
+
+      - name: UserStatus
+        kind: enum
+        values: [PendingVerification, Active, Blocked, Deleted]
+
+      - name: RefreshToken
+        primaryKey: tokenID
+        attributes:
+          - name: tokenID
+            type: UUID
+          - name: tokenHash
+            type: String
+          - name: expiresAt
+            type: Instant
+          - name: createdAt
+            type: Instant
+          - name: isRevoked
+            type: boolean
+
+      - name: UserRegisteredEvent
+        kind: event
+        attributes:
+          - name: userID
+            type: UUID
+          - name: email
+            type: String
+          - name: occurredAt
+            type: Instant
+
+      - name: UserBlockedEvent
+        kind: event
+        attributes:
+          - name: userID
+            type: UUID
+          - name: occurredAt
+            type: Instant
+
+  - name: Banking
+    entities:
+      - name: Acceptance
+        primaryKey: acceptanceID
+        attributes:
+          - name: acceptanceID
+            type: UUID
+          - name: userID
+            type: UUID
+          - name: externalConsentID
+            type: String
+          - name: status
+            type: ref(AcceptanceStatus)
+          - name: grantedAt
+            type: Instant
+          - name: expiresAt
+            type: Instant
+          - name: revokedAt
+            type: Instant
+        relationships:
+          - type: composition
+            to: AcceptanceLimit
+            cardinality: "1"
+          - type: association
+            to: LinkedAccount
+            cardinality: "*"
+
+      - name: AcceptanceStatus
+        kind: enum
+        values: [Pending, Active, Revoked, Expired]
+
+      - name: LinkedAccount
+        primaryKey: linkedAccountID
+        attributes:
+          - name: linkedAccountID
+            type: UUID
+          - name: displayName
+            type: String
+          - name: maskedPAN
+            type: String
+          - name: paymentToken
+            type: ref(PaymentToken)
+          - name: bankBIC
+            type: ref(BankBIC)
+          - name: currency
+            type: ref(Currency)
+          - name: linkedAt
+            type: Instant
+          - name: expiresAt
+            type: Instant
+          - name: status
+            type: ref(LinkedAccountStatus)
+
+      - name: Currency
+        kind: enum
+        values: [RUB]
+
+      - name: LinkedAccountStatus
+        kind: enum
+        values: [PendingVerification, Active, Revoked, Expired]
+
+      - name: BankBIC
+        primaryKey: (встроен)
+        attributes:
+          - name: value
+            type: String
+
+      - name: PaymentToken
+        primaryKey: (встроен)
+        attributes:
+          - name: value
+            type: String
+
+      - name: Money
+        kind: value_object
+        attributes:
+          - name: amount
+            type: BigDecimal
+          - name: currency
+            type: ref(Currency)
+
+      - name: AcceptanceLimit
+        primaryKey: (встроен в Acceptance)
+        attributes:
+          - name: totalDebitLimit
+            type: ref(Money)
+          - name: maxSingleDebit
+            type: ref(Money)
+
+      - name: AcceptanceGrantedEvent
+        kind: event
+        attributes:
+          - name: acceptanceID
+            type: UUID
+          - name: userID
+            type: UUID
+          - name: linkedAccountID
+            type: UUID
+          - name: occurredAt
+            type: Instant
+
+      - name: AcceptanceRevokedEvent
+        kind: event
+        attributes:
+          - name: acceptanceID
+            type: UUID
+          - name: userID
+            type: UUID
+          - name: occurredAt
+            type: Instant
+
+      - name: AccountLinkedEvent
+        kind: event
+        attributes:
+          - name: linkedAccountID
+            type: UUID
+          - name: userID
+            type: UUID
+          - name: paymentToken
+            type: String
+          - name: occurredAt
+            type: Instant
+
+  - name: ScenarioManagement
+    entities:
+      - name: UserScenario
+        primaryKey: userScenarioID
+        attributes:
+          - name: userScenarioID
+            type: UUID
+          - name: userID
+            type: UUID
+          - name: templateID
+            type: UUID
+            ref: ScenarioTemplate
+          - name: isActive
+            type: boolean
+          - name: activatedAt
+            type: Instant
+          - name: deactivatedAt
+            type: Instant
+          - name: lastTriggeredAt
+            type: Instant
+        relationships:
+          - type: composition
+            to: DebitConfig
+            cardinality: "1"
+          - type: composition
+            to: OracleSubscriptionRef
+            cardinality: "1"
+
+      - name: DebitConfig
+        primaryKey: (встроен)
+        attributes:
+          - name: debitAmount
+            type: ref(Money)
+          - name: recipientPaymentToken
+            type: ref(PaymentToken)
+          - name: acceptanceID
+            type: UUID
+            ref: Acceptance
+          - name: sourceAccountID
+            type: UUID
+            ref: LinkedAccount
+
+      - name: OracleSubscriptionRef
+        primaryKey: (встроен)
+        attributes:
+          - name: externalOracleSubscriptionRef
+            type: String
+          - name: status
+            type: ref(OracleSubscriptionStatus)
+          - name: lastSyncedAt
+            type: Instant
+
+      - name: OracleSubscriptionStatus
+        kind: enum
+        values: [Active, Paused, Terminated]
+
+      - name: ScenarioTemplate
+        primaryKey: scenarioID
+        attributes:
+          - name: scenarioID
+            type: UUID
+          - name: scenarioTypeCode
+            type: String
+          - name: name
+            type: String
+          - name: description
+            type: String
+          - name: isPublished
+            type: boolean
+          - name: createdAt
+            type: Instant
+          - name: updatedAt
+            type: Instant
+
+      - name: ScenarioExecution
+        primaryKey: executionID
+        attributes:
+          - name: executionID
+            type: UUID
+          - name: userScenarioID
+            type: UUID
+          - name: userID
+            type: UUID
+          - name: status
+            type: ref(ExecutionStatus)
+          - name: triggeredAt
+            type: Instant
+          - name: completedAt
+            type: Instant
+        relationships:
+          - type: composition
+            to: DebitOperation
+            cardinality: "*"
+          - type: composition
+            to: TriggerSnapshot
+            cardinality: "1"
+
+      - name: DebitOperation
+        primaryKey: debitOperationID
+        attributes:
+          - name: debitOperationID
+            type: UUID
+          - name: externalTransactionID
+            type: String
+          - name: amount
+            type: ref(Money)
+          - name: initiatedAt
+            type: Instant
+          - name: completedAt
+            type: Instant
+          - name: status
+            type: ref(ExecutionStatus)   # или DebitOperationStatus
+          - name: failure
+            type: ref(Failure)
+        relationships:
+          - type: association
+            to: ExecutionStatus
+          - type: association
+            to: Failure
+
+      - name: TriggerSnapshot
+        primaryKey: (встроен)
+        attributes:
+          - name: transactionID
+            type: String
+          - name: mcc
+            type: String
+          - name: merchantName
+            type: String
+          - name: amount
+            type: ref(Money)
+          - name: occurredAt
+            type: Instant
+          - name: attribute
+            type: String
+
+      - name: ExecutionStatus
+        kind: enum
+        values: [Pending, DebitInitiated, DebitCompleted, DebitFailed]
+
+      - name: Failure
+        primaryKey: (встроен)
+        attributes:
+          - name: code
+            type: String
+          - name: message
+            type: String
+
+      - name: ScenarioTriggeredEvent
+        kind: event
+        attributes:
+          - name: executionID
+            type: UUID
+          - name: userScenarioID
+            type: UUID
+          - name: userID
+            type: UUID
+          - name: triggerSnapshot
+            type: ref(TriggerSnapshot)
+          - name: occurredAt
+            type: Instant
+
+      - name: DebitCompletedEvent
+        kind: event
+        attributes:
+          - name: executionID
+            type: UUID
+          - name: debitOperationID
+            type: UUID
+          - name: amount
+            type: ref(Money)
+          - name: occurredAt
+            type: Instant
+
+      - name: DebitFailedEvent
+        kind: event
+        attributes:
+          - name: executionID
+            type: UUID
+          - name: failureCode
+            type: String
+          - name: failureMessage
+            type: String
+          - name: occurredAt
+            type: Instant
+
+  - name: UndesirablePurchases
+    description: "Реализация сценария 'Нежелательные покупки'"
+    entities:
+      - name: UndesirablePurchaseConfig
+        primaryKey: configID
+        attributes:
+          - name: configID
+            type: UUID
+          - name: userScenarioID
+            type: UUID
+            ref: UserScenario
+          - name: version
+            type: int
+          - name: matchMode
+            type: ref(MatchMode)
+          - name: createdAt
+            type: Instant
+          - name: updatedAt
+            type: Instant
+        relationships:
+          - type: composition
+            to: MCC
+            cardinality: "*"
+          - type: composition
+            to: MerchantRule
+            cardinality: "*"
+
+      - name: MCC
+        primaryKey: (embedded)
+        attributes:
+          - name: code
+            type: String
+          - name: description
+            type: String
+          - name: category
+            type: ref(MCCCategory)
+
+      - name: MCCCategory
+        primaryKey: (embedded)
+        attributes:
+          - name: name
+            type: String
+          - name: description
+            type: String
+
+      - name: MatchMode
+        kind: enum
+        values: [ANY, ALL]
+
+      - name: MerchantRule
+        primaryKey: ruleID
+        attributes:
+          - name: ruleID
+            type: UUID
+          - name: field
+            type: ref(MerchantRuleField)
+          - name: operator
+            type: ref(MerchantRuleOperator)
+          - name: value
+            type: String
+
+      - name: MerchantRuleField
+        kind: enum
+        values: [MerchantName, MerchantID]
+
+      - name: MerchantRuleOperator
+        kind: enum
+        values: [Equals, Contains, StartsWith]
+
+      - name: MCCCatalogue
+        primaryKey: (singleton)
+        attributes:
+          - name: updatedAt
+            type: Instant
+        relationships:
+          - type: composition
+            to: MCCEntry
+            cardinality: "*"
+
+      - name: MCCEntry
+        primaryKey: entryID
+        attributes:
+          - name: entryID
+            type: UUID
+          - name: code
+            type: String
+          - name: description
+            type: String
+          - name: category
+            type: String
+          - name: isActive
+            type: boolean
+
+      - name: UndesirablePurchaseConfigUpdatedEvent
+        kind: event
+        attributes:
+          - name: configID
+            type: UUID
+          - name: userScenarioID
+            type: UUID
+          - name: newVersion
+            type: int
+          - name: occurredAt
+            type: Instant
+
+      - name: UndesirablePurchaseDetectedEvent
+        kind: event
+        attributes:
+          - name: configID
+            type: UUID
+          - name: userScenarioID
+            type: UUID
+          - name: userID
+            type: UUID
+          - name: matchedMCC
+            type: String
+          - name: matchedMerchant
+            type: String
+          - name: transactionAmount
+            type: ref(Money)
+          - name: occurredAt
+            type: Instant
+
+      - name: UndesirablePurchaseConfigDto
+        kind: dto
+        attributes:
+          - name: mccs
+            type: List[String]
+          - name: merchantRules
+            type: List[ref(MerchantRuleDto)]
+          - name: matchMode
+            type: String
+
+      - name: MerchantRuleDto
+        kind: dto
+        attributes:
+          - name: field
+            type: String
+          - name: operator
+            type: String
+          - name: value
+            type: String
+
+      - name: UndesirablePurchasePlugin
+        kind: plugin
+        implements: ScenarioPlugin
+        attributes:
+          - name: SCENARIO_TYPE_CODE
+            type: String
+            value: "UNDESIRABLE_PURCHASES"
+
+  - name: CoreContract
+    description: "Интерфейсы для всех сценариев"
+    entities:
+      - name: ScenarioPlugin
+        kind: interface
+        methods:
+          - name: getScenarioTypeCode
+            returns: String
+          - name: evaluate
+            parameters:
+              - name: transaction
+                type: ref(TransactionEvent)
+              - name: config
+                type: ref(ScenarioPluginConfig)
+            returns: boolean
+          - name: parseConfig
+            parameters:
+              - name: raw
+                type: Map[String, Object]
+            returns: ref(ScenarioPluginConfig)
+          - name: buildOracleRules
+            parameters:
+              - name: config
+                type: ref(ScenarioPluginConfig)
+            returns: List[ref(RuleDto)]   # RuleDto – внешний тип
+
+      - name: ScenarioPluginConfig
+        kind: interface
+        methods:
+          - name: toMap
+            returns: Map[String, Object]
+
+      - name: TransactionEvent
+        kind: event_interface
+        attributes:
+          - name: transactionID
+            type: UUID
+          - name: MCC
+            type: String
+          - name: merchantName
+            type: String
+          - name: amount
+            type: String
+          - name: creditDebitIndicator
+            type: String
+          - name: occurredAt
+            type: Instant
+
+# Примечания:
+# - Все идентификаторы имеют тип UUID, если не указано иное.
+# - Временные метки – Instant.
+# - ref(...) означает ссылку на другой тип (сущность, enum или value object).
+# - Композиция означает, что дочерняя сущность не существует без родительской.
+# - События используются для асинхронного взаимодействия между доменами.
