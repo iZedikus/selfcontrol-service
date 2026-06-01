@@ -25,8 +25,32 @@ public class AdminController {
     }
 
     @PostMapping("/scenario-templates")
-    ScenarioTemplate createTemplate(@RequestBody ScenarioTemplate t) {
-        return templates.findByScenarioTypeCode(t.getScenarioTypeCode()).orElseGet(() -> templates.save(t));
+    ScenarioTemplate createTemplate(@RequestBody CreateScenarioTemplateRequest request) {
+        Set<String> mccCodes = normalizeMccCodes(request.mccCodes());
+        if (!mccCodes.isEmpty()) {
+            Optional<ScenarioTemplate> existing = templates.findByAnyMccCode(mccCodes).stream().findFirst();
+            if (existing.isPresent()) {
+                return existing.get();
+            }
+        }
+        ScenarioTemplate t = new ScenarioTemplate();
+        t.setScenarioTypeCode(request.scenarioTypeCode());
+        t.setName(request.name());
+        t.setDescription(request.description());
+        t.setPublished(request.published());
+        t.setMccCodes(mccCodes);
+        return templates.save(t);
+    }
+
+    private Set<String> normalizeMccCodes(Collection<String> mccCodes) {
+        if (mccCodes == null) {
+            return new LinkedHashSet<>();
+        }
+        return mccCodes.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(code -> !code.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     @PutMapping("/scenario-templates/{id}")
