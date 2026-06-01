@@ -1,5 +1,8 @@
 # Общие требования к системе
 general_requirements:
+  docker:
+    type: Containers
+    note: "ИС должна содержать в себе Docker-compose для подъема PostgreSQL и Rabbit"
   database:
     type: PostgreSQL
     note: "ИС НЕ ДОЛЖНА использовать In-memory хранилище"
