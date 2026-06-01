@@ -3,6 +3,7 @@ package ru.stepanov.selfcontrol.scenario;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -11,8 +12,10 @@ import ru.stepanov.selfcontrol.audit.AuditEvent;
 import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.identity.*;
 import ru.stepanov.selfcontrol.security.AuthenticationFacade;
-import ru.stepanov.selfcontrol.simulacrum.SimulacrumClient;
+import ru.stepanov.selfcontrol.simulacrum.SimulacrumApiLogEntry;
+import ru.stepanov.selfcontrol.simulacrum.SimulacrumApiLogRepository;
 
+import java.time.Instant;
 import java.util.*;
 import java.util.stream.*;
 
@@ -24,17 +27,17 @@ public class AdminController {
     private final UserRepository users;
     private final ScenarioService scenarios;
     private final ScenarioExecutionRepository executions;
-    private final SimulacrumClient simulacrum;
+    private final SimulacrumApiLogRepository simulacrumApiLogRepository;
     private final AuditService audit;
     private final AuthenticationFacade auth;
 
-    public AdminController(ScenarioTemplateRepository templates, UserScenarioRepository userScenarios, UserRepository users, ScenarioService scenarios, ScenarioExecutionRepository executions, SimulacrumClient simulacrum, AuditService audit, AuthenticationFacade auth) {
+    public AdminController(ScenarioTemplateRepository templates, UserScenarioRepository userScenarios, UserRepository users, ScenarioService scenarios, ScenarioExecutionRepository executions, SimulacrumApiLogRepository simulacrumApiLogRepository, AuditService audit, AuthenticationFacade auth) {
         this.templates = templates;
         this.userScenarios = userScenarios;
         this.users = users;
         this.scenarios = scenarios;
         this.executions = executions;
-        this.simulacrum = simulacrum;
+        this.simulacrumApiLogRepository = simulacrumApiLogRepository;
         this.audit = audit;
         this.auth = auth;
     }
@@ -169,8 +172,41 @@ public class AdminController {
     }
 
     @GetMapping("/simulacrum-api-log")
-    List<SimulacrumClient.ApiLog> simulacrumLog() {
-        return simulacrum.log();
+    Page<SimulacrumApiLogEntry> simulacrumLog(@RequestParam(required = false) UUID userId,
+                                               @RequestParam(required = false) String operationType,
+                                               @RequestParam(required = false) Instant createdFrom,
+                                               @RequestParam(required = false) Instant createdTo,
+                                               @RequestParam(required = false, name = "status") Integer responseStatus,
+                                               @RequestParam(defaultValue = "0") int page,
+                                               @RequestParam(defaultValue = "50") int size,
+                                               @RequestParam(defaultValue = "DESC") Sort.Direction direction) {
+        int boundedSize = Math.min(Math.max(size, 1), 100);
+        return simulacrumApiLogRepository.findAll(
+                simulacrumLogSpecification(userId, operationType, createdFrom, createdTo, responseStatus),
+                PageRequest.of(Math.max(page, 0), boundedSize, Sort.by(direction, "createdAt"))
+        );
+    }
+
+    private Specification<SimulacrumApiLogEntry> simulacrumLogSpecification(UUID userId, String operationType,
+                                                                            Instant createdFrom, Instant createdTo,
+                                                                            Integer responseStatus) {
+        Specification<SimulacrumApiLogEntry> spec = (root, query, cb) -> cb.conjunction();
+        if (userId != null) {
+            spec = spec.and((root, query, cb) -> cb.equal(root.get("userId"), userId));
+        }
+        if (operationType != null && !operationType.isBlank()) {
+            spec = spec.and((root, query, cb) -> cb.equal(root.get("operationType"), operationType));
+        }
+        if (createdFrom != null) {
+            spec = spec.and((root, query, cb) -> cb.greaterThanOrEqualTo(root.get("createdAt"), createdFrom));
+        }
+        if (createdTo != null) {
+            spec = spec.and((root, query, cb) -> cb.lessThanOrEqualTo(root.get("createdAt"), createdTo));
+        }
+        if (responseStatus != null) {
+            spec = spec.and((root, query, cb) -> cb.equal(root.get("responseStatus"), responseStatus));
+        }
+        return spec;
     }
 
     @GetMapping("/oracle-trigger-log")
