@@ -17,6 +17,10 @@ public class User {
     private PasswordHash passwordHash;
     @Embedded
     private PhoneNumber phoneNumber;
+    private String firstName;
+    private String middleName;
+    private String lastName;
+    private String additionalContact;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private UserRole role;
@@ -27,6 +31,7 @@ public class User {
     private Instant createdAt;
     private Instant updatedAt;
     private Instant lastLoginAt;
+    private Instant deletedAt;
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<RefreshToken> refreshTokens = new ArrayList<>();
 
@@ -75,6 +80,38 @@ public class User {
         this.phoneNumber = phoneNumber;
     }
 
+    public String getFirstName() {
+        return firstName;
+    }
+
+    public void setFirstName(String firstName) {
+        this.firstName = firstName;
+    }
+
+    public String getMiddleName() {
+        return middleName;
+    }
+
+    public void setMiddleName(String middleName) {
+        this.middleName = middleName;
+    }
+
+    public String getLastName() {
+        return lastName;
+    }
+
+    public void setLastName(String lastName) {
+        this.lastName = lastName;
+    }
+
+    public String getAdditionalContact() {
+        return additionalContact;
+    }
+
+    public void setAdditionalContact(String additionalContact) {
+        this.additionalContact = additionalContact;
+    }
+
     public UserRole getRole() {
         return role;
     }
@@ -113,6 +150,14 @@ public class User {
 
     public void setLastLoginAt(Instant lastLoginAt) {
         this.lastLoginAt = lastLoginAt;
+    }
+
+    public Instant getDeletedAt() {
+        return deletedAt;
+    }
+
+    public void setDeletedAt(Instant deletedAt) {
+        this.deletedAt = deletedAt;
     }
 
     public List<RefreshToken> getRefreshTokens() {

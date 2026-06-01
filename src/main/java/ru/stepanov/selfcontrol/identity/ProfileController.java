@@ -6,26 +6,30 @@ import ru.stepanov.selfcontrol.security.AuthenticationFacade;
 @RestController
 @RequestMapping("/api/v1/profile")
 public class ProfileController {
-    private final UserRepository users;
+    private final ProfileService profiles;
     private final AuthenticationFacade auth;
 
-    public ProfileController(UserRepository users, AuthenticationFacade auth) {
-        this.users = users;
+    public ProfileController(ProfileService profiles, AuthenticationFacade auth) {
+        this.profiles = profiles;
         this.auth = auth;
     }
 
     @GetMapping
     User me() {
-        return users.findById(auth.userId()).orElseThrow();
+        return profiles.get(auth.userId());
     }
 
     @PatchMapping
     User update(@RequestBody UpdateProfileRequest r) {
-        User u = users.findById(auth.userId()).orElseThrow();
-        if (r.phoneNumber() != null) u.setPhoneNumber(new PhoneNumber(r.phoneNumber()));
-        return users.save(u);
+        return profiles.update(auth.userId(), r);
     }
 
-    public record UpdateProfileRequest(String phoneNumber) {
+    @DeleteMapping
+    void delete() {
+        profiles.delete(auth.userId());
+    }
+
+    public record UpdateProfileRequest(String phoneNumber, String firstName, String middleName, String lastName,
+                                       String additionalContact) {
     }
 }

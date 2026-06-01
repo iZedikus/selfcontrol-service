@@ -6,7 +6,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
 import org.springframework.context.annotation.*;
 
-import java.util.*;
+import java.util.Map;
 
 @Configuration
 public class RabbitTopologyConfig {
