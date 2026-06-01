@@ -8,4 +8,8 @@ public interface UserScenarioRepository extends JpaRepository<UserScenario, UUID
     List<UserScenario> findByUserId(UUID userId);
 
     List<UserScenario> findByUserIdAndActiveTrue(UUID userId);
+
+    boolean existsByTemplateScenarioId(UUID scenarioId);
+
+    boolean existsByTemplateScenarioIdAndActiveTrue(UUID scenarioId);
 }
