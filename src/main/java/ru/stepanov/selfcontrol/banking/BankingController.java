@@ -9,13 +9,13 @@ import java.util.*;
 @RequestMapping("/api/v1/banking")
 public class BankingController {
     private final LinkedAccountRepository accounts;
-    private final AcceptanceRepository acceptances;
+    private final AcceptanceService acceptanceService;
     private final BankingAccountLifecycleService accountLifecycle;
     private final AuthenticationFacade auth;
 
-    public BankingController(LinkedAccountRepository accounts, AcceptanceRepository acceptances, BankingAccountLifecycleService accountLifecycle, AuthenticationFacade auth) {
+    public BankingController(LinkedAccountRepository accounts, AcceptanceService acceptanceService, BankingAccountLifecycleService accountLifecycle, AuthenticationFacade auth) {
         this.accounts = accounts;
-        this.acceptances = acceptances;
+        this.acceptanceService = acceptanceService;
         this.accountLifecycle = accountLifecycle;
         this.auth = auth;
     }
@@ -40,19 +40,16 @@ public class BankingController {
 
     @GetMapping("/acceptances")
     List<Acceptance> acceptances() {
-        return acceptances.findByUserId(auth.userId());
+        return acceptanceService.findUserAcceptances(auth.userId());
     }
 
     @PostMapping("/acceptances")
-    Acceptance createAcceptance(@RequestBody Acceptance a) {
-        a.setUserId(auth.userId());
-        return acceptances.save(a);
+    Acceptance createAcceptance(@RequestBody GrantAcceptanceRequest request) {
+        return acceptanceService.grant(auth.userId(), request);
     }
 
     @PostMapping("/acceptances/{id}/revoke")
     Acceptance revoke(@PathVariable UUID id) {
-        Acceptance a = acceptances.findById(id).orElseThrow();
-        a.setStatus(AcceptanceStatus.Revoked);
-        return acceptances.save(a);
+        return acceptanceService.revoke(auth.userId(), id);
     }
 }
