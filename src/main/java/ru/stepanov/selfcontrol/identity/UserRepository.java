@@ -1,1 +1,11 @@
-package ru.stepanov.selfcontrol.identity; import org.springframework.data.jpa.repository.JpaRepository; import java.util.*; public interface UserRepository extends JpaRepository<User,UUID>{ Optional<User> findByEmail_Value(String email); boolean existsByEmail_Value(String email); }
+package ru.stepanov.selfcontrol.identity;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.*;
+
+public interface UserRepository extends JpaRepository<User, UUID> {
+    Optional<User> findByEmail_Value(String email);
+
+    boolean existsByEmail_Value(String email);
+}

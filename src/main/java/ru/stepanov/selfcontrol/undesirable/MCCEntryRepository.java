@@ -1,1 +1,9 @@
-package ru.stepanov.selfcontrol.undesirable; import org.springframework.data.jpa.repository.JpaRepository; import java.util.*; public interface MCCEntryRepository extends JpaRepository<MCCEntry,UUID>{ List<MCCEntry> findByActiveTrue(); }
+package ru.stepanov.selfcontrol.undesirable;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.*;
+
+public interface MCCEntryRepository extends JpaRepository<MCCEntry, UUID> {
+    List<MCCEntry> findByActiveTrue();
+}

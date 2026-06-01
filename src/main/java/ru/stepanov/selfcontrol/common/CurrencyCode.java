@@ -1,2 +1,5 @@
 package ru.stepanov.selfcontrol.common;
-public enum CurrencyCode { RUB }
+
+public enum CurrencyCode {
+    RUB
+}

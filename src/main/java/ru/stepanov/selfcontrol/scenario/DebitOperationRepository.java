@@ -1,1 +1,8 @@
-package ru.stepanov.selfcontrol.scenario; import org.springframework.data.jpa.repository.JpaRepository; import java.util.*; public interface DebitOperationRepository extends JpaRepository<DebitOperation,UUID>{}
+package ru.stepanov.selfcontrol.scenario;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.*;
+
+public interface DebitOperationRepository extends JpaRepository<DebitOperation, UUID> {
+}

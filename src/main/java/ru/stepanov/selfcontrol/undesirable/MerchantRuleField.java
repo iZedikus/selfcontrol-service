@@ -1,1 +1,6 @@
-package ru.stepanov.selfcontrol.undesirable; public enum MerchantRuleField { MerchantName, MerchantID }
+package ru.stepanov.selfcontrol.undesirable;
+
+public enum MerchantRuleField {
+    MerchantName,
+    MerchantID
+}

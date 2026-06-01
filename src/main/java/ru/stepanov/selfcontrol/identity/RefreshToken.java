@@ -1,4 +1,79 @@
 package ru.stepanov.selfcontrol.identity;
-import jakarta.persistence.*;import java.time.Instant;import java.util.*;
-@Entity @Table(name="refresh_tokens",indexes=@Index(name="idx_refresh_token_hash",columnList="token_hash",unique=true))
-public class RefreshToken { @Id @Column(name="token_id") private UUID tokenId; @ManyToOne(fetch=FetchType.LAZY) @JoinColumn(name="user_id",nullable=false) private User user; @Column(name="token_hash",nullable=false,unique=true) private String tokenHash; @Column(nullable=false) private Instant expiresAt; @Column(nullable=false) private Instant createdAt; @Column(nullable=false) private boolean revoked; @PrePersist void pre(){if(tokenId==null)tokenId=UUID.randomUUID(); if(createdAt==null)createdAt=Instant.now();} public UUID getTokenId(){return tokenId;} public void setTokenId(UUID tokenId){this.tokenId=tokenId;} public User getUser(){return user;} public void setUser(User user){this.user=user;} public String getTokenHash(){return tokenHash;} public void setTokenHash(String tokenHash){this.tokenHash=tokenHash;} public Instant getExpiresAt(){return expiresAt;} public void setExpiresAt(Instant expiresAt){this.expiresAt=expiresAt;} public Instant getCreatedAt(){return createdAt;} public void setCreatedAt(Instant createdAt){this.createdAt=createdAt;} public boolean isRevoked(){return revoked;} public void setRevoked(boolean revoked){this.revoked=revoked;} }
+
+import jakarta.persistence.*;
+
+import java.time.Instant;
+import java.util.*;
+
+@Entity
+@Table(name = "refresh_tokens", indexes = @Index(name = "idx_refresh_token_hash", columnList = "token_hash", unique = true))
+public class RefreshToken {
+    @Id
+    @Column(name = "token_id")
+    private UUID tokenId;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
+    @Column(name = "token_hash", nullable = false, unique = true)
+    private String tokenHash;
+    @Column(nullable = false)
+    private Instant expiresAt;
+    @Column(nullable = false)
+    private Instant createdAt;
+    @Column(nullable = false)
+    private boolean revoked;
+
+    @PrePersist
+    void pre() {
+        if (tokenId == null) tokenId = UUID.randomUUID();
+        if (createdAt == null) createdAt = Instant.now();
+    }
+
+    public UUID getTokenId() {
+        return tokenId;
+    }
+
+    public void setTokenId(UUID tokenId) {
+        this.tokenId = tokenId;
+    }
+
+    public User getUser() {
+        return user;
+    }
+
+    public void setUser(User user) {
+        this.user = user;
+    }
+
+    public String getTokenHash() {
+        return tokenHash;
+    }
+
+    public void setTokenHash(String tokenHash) {
+        this.tokenHash = tokenHash;
+    }
+
+    public Instant getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(Instant expiresAt) {
+        this.expiresAt = expiresAt;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public boolean isRevoked() {
+        return revoked;
+    }
+
+    public void setRevoked(boolean revoked) {
+        this.revoked = revoked;
+    }
+}

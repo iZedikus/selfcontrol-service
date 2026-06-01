@@ -1,1 +1,30 @@
-package ru.stepanov.selfcontrol.banking; import jakarta.persistence.*; import ru.stepanov.selfcontrol.common.Money; @Embeddable public class AcceptanceLimit{ @Embedded @AttributeOverrides({@AttributeOverride(name="amount",column=@Column(name="total_debit_limit",precision=19,scale=2)),@AttributeOverride(name="currency",column=@Column(name="total_debit_currency"))}) private Money totalDebitLimit; @Embedded @AttributeOverrides({@AttributeOverride(name="amount",column=@Column(name="max_single_debit",precision=19,scale=2)),@AttributeOverride(name="currency",column=@Column(name="max_single_debit_currency"))}) private Money maxSingleDebit; public Money getTotalDebitLimit(){return totalDebitLimit;} public void setTotalDebitLimit(Money totalDebitLimit){this.totalDebitLimit=totalDebitLimit;} public Money getMaxSingleDebit(){return maxSingleDebit;} public void setMaxSingleDebit(Money maxSingleDebit){this.maxSingleDebit=maxSingleDebit;} }
+package ru.stepanov.selfcontrol.banking;
+
+import jakarta.persistence.*;
+import ru.stepanov.selfcontrol.common.Money;
+
+@Embeddable
+public class AcceptanceLimit {
+    @Embedded
+    @AttributeOverrides({@AttributeOverride(name = "amount", column = @Column(name = "total_debit_limit", precision = 19, scale = 2)), @AttributeOverride(name = "currency", column = @Column(name = "total_debit_currency"))})
+    private Money totalDebitLimit;
+    @Embedded
+    @AttributeOverrides({@AttributeOverride(name = "amount", column = @Column(name = "max_single_debit", precision = 19, scale = 2)), @AttributeOverride(name = "currency", column = @Column(name = "max_single_debit_currency"))})
+    private Money maxSingleDebit;
+
+    public Money getTotalDebitLimit() {
+        return totalDebitLimit;
+    }
+
+    public void setTotalDebitLimit(Money totalDebitLimit) {
+        this.totalDebitLimit = totalDebitLimit;
+    }
+
+    public Money getMaxSingleDebit() {
+        return maxSingleDebit;
+    }
+
+    public void setMaxSingleDebit(Money maxSingleDebit) {
+        this.maxSingleDebit = maxSingleDebit;
+    }
+}

@@ -1,1 +1,6 @@
-package ru.stepanov.selfcontrol.undesirable; public enum MatchMode { ANY, ALL }
+package ru.stepanov.selfcontrol.undesirable;
+
+public enum MatchMode {
+    ANY,
+    ALL
+}

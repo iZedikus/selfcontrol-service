@@ -1,1 +1,7 @@
-package ru.stepanov.selfcontrol.undesirable; public enum MerchantRuleOperator { Equals, Contains, StartsWith }
+package ru.stepanov.selfcontrol.undesirable;
+
+public enum MerchantRuleOperator {
+    Equals,
+    Contains,
+    StartsWith
+}

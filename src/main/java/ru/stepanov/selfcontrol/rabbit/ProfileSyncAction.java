@@ -1,1 +1,8 @@
-package ru.stepanov.selfcontrol.rabbit; public enum ProfileSyncAction { REGISTER, UPDATE_RULES, PAUSE, TERMINATE }
+package ru.stepanov.selfcontrol.rabbit;
+
+public enum ProfileSyncAction {
+    REGISTER,
+    UPDATE_RULES,
+    PAUSE,
+    TERMINATE
+}

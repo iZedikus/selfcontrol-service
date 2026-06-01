@@ -1,1 +1,8 @@
-package ru.stepanov.selfcontrol.scenario; public enum ExecutionStatus { Pending, DebitInitiated, DebitCompleted, DebitFailed }
+package ru.stepanov.selfcontrol.scenario;
+
+public enum ExecutionStatus {
+    Pending,
+    DebitInitiated,
+    DebitCompleted,
+    DebitFailed
+}

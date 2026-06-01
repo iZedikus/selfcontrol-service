@@ -1,1 +1,24 @@
-package ru.stepanov.selfcontrol.identity; import jakarta.persistence.*; @Embeddable public class PasswordHash{ @Column(name="password_hash",nullable=false) private String value; public PasswordHash(){} public PasswordHash(String v){value=v;} public String getValue(){return value;} public void setValue(String value){this.value=value;} }
+package ru.stepanov.selfcontrol.identity;
+
+import jakarta.persistence.*;
+
+@Embeddable
+public class PasswordHash {
+    @Column(name = "password_hash", nullable = false)
+    private String value;
+
+    public PasswordHash() {
+    }
+
+    public PasswordHash(String v) {
+        value = v;
+    }
+
+    public String getValue() {
+        return value;
+    }
+
+    public void setValue(String value) {
+        this.value = value;
+    }
+}

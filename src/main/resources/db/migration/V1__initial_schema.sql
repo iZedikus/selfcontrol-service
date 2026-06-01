@@ -1,15 +1,143 @@
-CREATE TABLE users (user_id UUID PRIMARY KEY, email VARCHAR(320) NOT NULL UNIQUE, password_hash VARCHAR(255) NOT NULL, phone_number VARCHAR(64) NOT NULL, role VARCHAR(32) NOT NULL, status VARCHAR(32) NOT NULL, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ, last_login_at TIMESTAMPTZ);
-CREATE TABLE refresh_tokens (token_id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(user_id), token_hash VARCHAR(128) NOT NULL UNIQUE, expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL, revoked BOOLEAN NOT NULL DEFAULT FALSE);
-CREATE TABLE acceptances (acceptance_id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(user_id), external_consent_id VARCHAR(255), status VARCHAR(32), granted_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, revoked_at TIMESTAMPTZ, total_debit_limit NUMERIC(19,2), total_debit_currency VARCHAR(3), max_single_debit NUMERIC(19,2), max_single_debit_currency VARCHAR(3));
-CREATE TABLE linked_accounts (linked_account_id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(user_id), acceptance_id UUID REFERENCES acceptances(acceptance_id), display_name VARCHAR(255), masked_pan VARCHAR(64), payment_token VARCHAR(255), bank_bic VARCHAR(11), currency VARCHAR(3), linked_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, status VARCHAR(32));
-CREATE TABLE scenario_templates (scenario_id UUID PRIMARY KEY, scenario_type_code VARCHAR(128) NOT NULL UNIQUE, name VARCHAR(255), description VARCHAR(2000), published BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
-CREATE TABLE user_scenarios (user_scenario_id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(user_id), template_id UUID REFERENCES scenario_templates(scenario_id), active BOOLEAN NOT NULL DEFAULT FALSE, activated_at TIMESTAMPTZ, deactivated_at TIMESTAMPTZ, last_triggered_at TIMESTAMPTZ, debit_amount NUMERIC(19,2), debit_currency VARCHAR(3), recipient_payment_token VARCHAR(255), acceptance_id UUID REFERENCES acceptances(acceptance_id), source_account_id UUID REFERENCES linked_accounts(linked_account_id), external_oracle_subscription_ref VARCHAR(255), status VARCHAR(32), last_synced_at TIMESTAMPTZ);
-CREATE TABLE undesirable_purchase_configs (config_id UUID PRIMARY KEY, user_scenario_id UUID NOT NULL UNIQUE REFERENCES user_scenarios(user_scenario_id), version INTEGER NOT NULL, match_mode VARCHAR(16), created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
-CREATE TABLE undesirable_config_mccs (config_id UUID NOT NULL REFERENCES undesirable_purchase_configs(config_id) ON DELETE CASCADE, code VARCHAR(4), mcc_description VARCHAR(255), category_name VARCHAR(255), category_description VARCHAR(255));
-CREATE TABLE merchant_rules (rule_id UUID PRIMARY KEY, config_id UUID REFERENCES undesirable_purchase_configs(config_id) ON DELETE CASCADE, field VARCHAR(64), operator VARCHAR(64), rule_value VARCHAR(255));
-CREATE TABLE mcc_entries (entry_id UUID PRIMARY KEY, code VARCHAR(4), description VARCHAR(255), category VARCHAR(255), active BOOLEAN NOT NULL DEFAULT TRUE);
-CREATE TABLE scenario_executions (execution_id UUID PRIMARY KEY, user_scenario_id UUID NOT NULL REFERENCES user_scenarios(user_scenario_id), user_id UUID NOT NULL REFERENCES users(user_id), trigger_event_id UUID NOT NULL UNIQUE, status VARCHAR(64), triggered_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, transaction_id VARCHAR(255), mcc VARCHAR(4), merchant_name VARCHAR(255), trigger_amount NUMERIC(19,2), trigger_currency VARCHAR(3), occurred_at TIMESTAMPTZ, attribute VARCHAR(255));
-CREATE TABLE debit_operations (debit_operation_id UUID PRIMARY KEY, execution_id UUID NOT NULL REFERENCES scenario_executions(execution_id) ON DELETE CASCADE, external_transaction_id VARCHAR(255), amount NUMERIC(19,2), currency VARCHAR(3), initiated_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, status VARCHAR(64), code VARCHAR(128), message VARCHAR(1000));
-CREATE INDEX idx_refresh_token_hash ON refresh_tokens(token_hash);
-CREATE INDEX idx_mcc_code ON mcc_entries(code);
-CREATE INDEX idx_scenario_execution_trigger_event ON scenario_executions(trigger_event_id);
+CREATE TABLE users
+(
+    user_id       UUID PRIMARY KEY,
+    email         VARCHAR(320) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    phone_number  VARCHAR(64)  NOT NULL,
+    role          VARCHAR(32)  NOT NULL,
+    status        VARCHAR(32)  NOT NULL,
+    created_at    TIMESTAMPTZ  NOT NULL,
+    updated_at    TIMESTAMPTZ,
+    last_login_at TIMESTAMPTZ
+);
+CREATE TABLE refresh_tokens
+(
+    token_id   UUID PRIMARY KEY,
+    user_id    UUID         NOT NULL REFERENCES users (user_id),
+    token_hash VARCHAR(128) NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ  NOT NULL,
+    created_at TIMESTAMPTZ  NOT NULL,
+    revoked    BOOLEAN      NOT NULL DEFAULT FALSE
+);
+CREATE TABLE acceptances
+(
+    acceptance_id             UUID PRIMARY KEY,
+    user_id                   UUID NOT NULL REFERENCES users (user_id),
+    external_consent_id       VARCHAR(255),
+    status                    VARCHAR(32),
+    granted_at                TIMESTAMPTZ,
+    expires_at                TIMESTAMPTZ,
+    revoked_at                TIMESTAMPTZ,
+    total_debit_limit         NUMERIC(19, 2),
+    total_debit_currency      VARCHAR(3),
+    max_single_debit          NUMERIC(19, 2),
+    max_single_debit_currency VARCHAR(3)
+);
+CREATE TABLE linked_accounts
+(
+    linked_account_id UUID PRIMARY KEY,
+    user_id           UUID NOT NULL REFERENCES users (user_id),
+    acceptance_id     UUID REFERENCES acceptances (acceptance_id),
+    display_name      VARCHAR(255),
+    masked_pan        VARCHAR(64),
+    payment_token     VARCHAR(255),
+    bank_bic          VARCHAR(11),
+    currency          VARCHAR(3),
+    linked_at         TIMESTAMPTZ,
+    expires_at        TIMESTAMPTZ,
+    status            VARCHAR(32)
+);
+CREATE TABLE scenario_templates
+(
+    scenario_id        UUID PRIMARY KEY,
+    scenario_type_code VARCHAR(128) NOT NULL UNIQUE,
+    name               VARCHAR(255),
+    description        VARCHAR(2000),
+    published          BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_at         TIMESTAMPTZ,
+    updated_at         TIMESTAMPTZ
+);
+CREATE TABLE user_scenarios
+(
+    user_scenario_id                 UUID PRIMARY KEY,
+    user_id                          UUID    NOT NULL REFERENCES users (user_id),
+    template_id                      UUID REFERENCES scenario_templates (scenario_id),
+    active                           BOOLEAN NOT NULL DEFAULT FALSE,
+    activated_at                     TIMESTAMPTZ,
+    deactivated_at                   TIMESTAMPTZ,
+    last_triggered_at                TIMESTAMPTZ,
+    debit_amount                     NUMERIC(19, 2),
+    debit_currency                   VARCHAR(3),
+    recipient_payment_token          VARCHAR(255),
+    acceptance_id                    UUID REFERENCES acceptances (acceptance_id),
+    source_account_id                UUID REFERENCES linked_accounts (linked_account_id),
+    external_oracle_subscription_ref VARCHAR(255),
+    status                           VARCHAR(32),
+    last_synced_at                   TIMESTAMPTZ
+);
+CREATE TABLE undesirable_purchase_configs
+(
+    config_id        UUID PRIMARY KEY,
+    user_scenario_id UUID    NOT NULL UNIQUE REFERENCES user_scenarios (user_scenario_id),
+    version          INTEGER NOT NULL,
+    match_mode       VARCHAR(16),
+    created_at       TIMESTAMPTZ,
+    updated_at       TIMESTAMPTZ
+);
+CREATE TABLE undesirable_config_mccs
+(
+    config_id            UUID NOT NULL REFERENCES undesirable_purchase_configs (config_id) ON DELETE CASCADE,
+    code                 VARCHAR(4),
+    mcc_description      VARCHAR(255),
+    category_name        VARCHAR(255),
+    category_description VARCHAR(255)
+);
+CREATE TABLE merchant_rules
+(
+    rule_id    UUID PRIMARY KEY,
+    config_id  UUID REFERENCES undesirable_purchase_configs (config_id) ON DELETE CASCADE,
+    field      VARCHAR(64),
+    operator   VARCHAR(64),
+    rule_value VARCHAR(255)
+);
+CREATE TABLE mcc_entries
+(
+    entry_id    UUID PRIMARY KEY,
+    code        VARCHAR(4),
+    description VARCHAR(255),
+    category    VARCHAR(255),
+    active      BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE TABLE scenario_executions
+(
+    execution_id     UUID PRIMARY KEY,
+    user_scenario_id UUID NOT NULL REFERENCES user_scenarios (user_scenario_id),
+    user_id          UUID NOT NULL REFERENCES users (user_id),
+    trigger_event_id UUID NOT NULL UNIQUE,
+    status           VARCHAR(64),
+    triggered_at     TIMESTAMPTZ,
+    completed_at     TIMESTAMPTZ,
+    transaction_id   VARCHAR(255),
+    mcc              VARCHAR(4),
+    merchant_name    VARCHAR(255),
+    trigger_amount   NUMERIC(19, 2),
+    trigger_currency VARCHAR(3),
+    occurred_at      TIMESTAMPTZ,
+    attribute        VARCHAR(255)
+);
+CREATE TABLE debit_operations
+(
+    debit_operation_id      UUID PRIMARY KEY,
+    execution_id            UUID NOT NULL REFERENCES scenario_executions (execution_id) ON DELETE CASCADE,
+    external_transaction_id VARCHAR(255),
+    amount                  NUMERIC(19, 2),
+    currency                VARCHAR(3),
+    initiated_at            TIMESTAMPTZ,
+    completed_at            TIMESTAMPTZ,
+    status                  VARCHAR(64),
+    code                    VARCHAR(128),
+    message                 VARCHAR(1000)
+);
+CREATE INDEX idx_refresh_token_hash ON refresh_tokens (token_hash);
+CREATE INDEX idx_mcc_code ON mcc_entries (code);
+CREATE INDEX idx_scenario_execution_trigger_event ON scenario_executions (trigger_event_id);

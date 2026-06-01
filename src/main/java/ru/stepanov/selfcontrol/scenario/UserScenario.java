@@ -1,1 +1,105 @@
-package ru.stepanov.selfcontrol.scenario; import jakarta.persistence.*; import java.time.Instant; import java.util.*; @Entity @Table(name="user_scenarios") public class UserScenario{ @Id @Column(name="user_scenario_id") private UUID userScenarioId; @Column(nullable=false) private UUID userId; @ManyToOne(fetch=FetchType.LAZY) @JoinColumn(name="template_id") private ScenarioTemplate template; private boolean active; private Instant activatedAt; private Instant deactivatedAt; private Instant lastTriggeredAt; @Embedded private DebitConfig debitConfig; @Embedded private OracleSubscriptionRef oracleSubscriptionRef; @PrePersist void pre(){if(userScenarioId==null)userScenarioId=UUID.randomUUID(); if(activatedAt==null&&active)activatedAt=Instant.now();} public UUID getUserScenarioId(){return userScenarioId;} public void setUserScenarioId(UUID userScenarioId){this.userScenarioId=userScenarioId;} public UUID getUserId(){return userId;} public void setUserId(UUID userId){this.userId=userId;} public ScenarioTemplate getTemplate(){return template;} public void setTemplate(ScenarioTemplate template){this.template=template;} public boolean isActive(){return active;} public void setActive(boolean active){this.active=active;} public Instant getActivatedAt(){return activatedAt;} public void setActivatedAt(Instant activatedAt){this.activatedAt=activatedAt;} public Instant getDeactivatedAt(){return deactivatedAt;} public void setDeactivatedAt(Instant deactivatedAt){this.deactivatedAt=deactivatedAt;} public Instant getLastTriggeredAt(){return lastTriggeredAt;} public void setLastTriggeredAt(Instant lastTriggeredAt){this.lastTriggeredAt=lastTriggeredAt;} public DebitConfig getDebitConfig(){return debitConfig;} public void setDebitConfig(DebitConfig debitConfig){this.debitConfig=debitConfig;} public OracleSubscriptionRef getOracleSubscriptionRef(){return oracleSubscriptionRef;} public void setOracleSubscriptionRef(OracleSubscriptionRef o){oracleSubscriptionRef=o;} }
+package ru.stepanov.selfcontrol.scenario;
+
+import jakarta.persistence.*;
+
+import java.time.Instant;
+import java.util.*;
+
+@Entity
+@Table(name = "user_scenarios")
+public class UserScenario {
+    @Id
+    @Column(name = "user_scenario_id")
+    private UUID userScenarioId;
+    @Column(nullable = false)
+    private UUID userId;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "template_id")
+    private ScenarioTemplate template;
+    private boolean active;
+    private Instant activatedAt;
+    private Instant deactivatedAt;
+    private Instant lastTriggeredAt;
+    @Embedded
+    private DebitConfig debitConfig;
+    @Embedded
+    private OracleSubscriptionRef oracleSubscriptionRef;
+
+    @PrePersist
+    void pre() {
+        if (userScenarioId == null) userScenarioId = UUID.randomUUID();
+        if (activatedAt == null && active) activatedAt = Instant.now();
+    }
+
+    public UUID getUserScenarioId() {
+        return userScenarioId;
+    }
+
+    public void setUserScenarioId(UUID userScenarioId) {
+        this.userScenarioId = userScenarioId;
+    }
+
+    public UUID getUserId() {
+        return userId;
+    }
+
+    public void setUserId(UUID userId) {
+        this.userId = userId;
+    }
+
+    public ScenarioTemplate getTemplate() {
+        return template;
+    }
+
+    public void setTemplate(ScenarioTemplate template) {
+        this.template = template;
+    }
+
+    public boolean isActive() {
+        return active;
+    }
+
+    public void setActive(boolean active) {
+        this.active = active;
+    }
+
+    public Instant getActivatedAt() {
+        return activatedAt;
+    }
+
+    public void setActivatedAt(Instant activatedAt) {
+        this.activatedAt = activatedAt;
+    }
+
+    public Instant getDeactivatedAt() {
+        return deactivatedAt;
+    }
+
+    public void setDeactivatedAt(Instant deactivatedAt) {
+        this.deactivatedAt = deactivatedAt;
+    }
+
+    public Instant getLastTriggeredAt() {
+        return lastTriggeredAt;
+    }
+
+    public void setLastTriggeredAt(Instant lastTriggeredAt) {
+        this.lastTriggeredAt = lastTriggeredAt;
+    }
+
+    public DebitConfig getDebitConfig() {
+        return debitConfig;
+    }
+
+    public void setDebitConfig(DebitConfig debitConfig) {
+        this.debitConfig = debitConfig;
+    }
+
+    public OracleSubscriptionRef getOracleSubscriptionRef() {
+        return oracleSubscriptionRef;
+    }
+
+    public void setOracleSubscriptionRef(OracleSubscriptionRef o) {
+        oracleSubscriptionRef = o;
+    }
+}
