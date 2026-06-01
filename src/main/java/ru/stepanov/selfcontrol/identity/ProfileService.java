@@ -2,11 +2,13 @@ package ru.stepanov.selfcontrol.identity;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.banking.BankingAccountLifecycleService;
 import ru.stepanov.selfcontrol.scenario.ScenarioService;
 import ru.stepanov.selfcontrol.scenario.UserScenarioRepository;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -16,13 +18,15 @@ public class ProfileService {
     private final BankingAccountLifecycleService bankingLifecycle;
     private final UserScenarioRepository scenarios;
     private final ScenarioService scenarioService;
+    private final AuditService audit;
 
-    public ProfileService(UserRepository users, RefreshTokenRepository refreshTokens, BankingAccountLifecycleService bankingLifecycle, UserScenarioRepository scenarios, ScenarioService scenarioService) {
+    public ProfileService(UserRepository users, RefreshTokenRepository refreshTokens, BankingAccountLifecycleService bankingLifecycle, UserScenarioRepository scenarios, ScenarioService scenarioService, AuditService audit) {
         this.users = users;
         this.refreshTokens = refreshTokens;
         this.bankingLifecycle = bankingLifecycle;
         this.scenarios = scenarios;
         this.scenarioService = scenarioService;
+        this.audit = audit;
     }
 
     @Transactional(readOnly = true)
@@ -40,7 +44,15 @@ public class ProfileService {
         if (r.middleName() != null) u.setMiddleName(r.middleName());
         if (r.lastName() != null) u.setLastName(r.lastName());
         if (r.additionalContact() != null) u.setAdditionalContact(r.additionalContact());
-        return users.save(u);
+        User saved = users.save(u);
+        audit.record(userId, userId, "USER_PROFILE_UPDATED", "USER", userId, Map.of(
+                "phoneNumberChanged", r.phoneNumber() != null,
+                "firstNameChanged", r.firstName() != null,
+                "middleNameChanged", r.middleName() != null,
+                "lastNameChanged", r.lastName() != null,
+                "additionalContactChanged", r.additionalContact() != null
+        ));
+        return saved;
     }
 
     @Transactional
@@ -58,5 +70,6 @@ public class ProfileService {
         u.setDeletedAt(now);
         u.setUpdatedAt(now);
         users.save(u);
+        audit.record(userId, userId, "USER_DELETED", "USER", userId, Map.of("deletedAt", now));
     }
 }

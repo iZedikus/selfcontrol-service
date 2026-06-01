@@ -1,10 +1,16 @@
 package ru.stepanov.selfcontrol.scenario;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import ru.stepanov.selfcontrol.audit.AuditEvent;
+import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.identity.*;
+import ru.stepanov.selfcontrol.security.AuthenticationFacade;
 import ru.stepanov.selfcontrol.simulacrum.SimulacrumClient;
 
 import java.util.*;
@@ -19,14 +25,18 @@ public class AdminController {
     private final ScenarioService scenarios;
     private final ScenarioExecutionRepository executions;
     private final SimulacrumClient simulacrum;
+    private final AuditService audit;
+    private final AuthenticationFacade auth;
 
-    public AdminController(ScenarioTemplateRepository templates, UserScenarioRepository userScenarios, UserRepository users, ScenarioService scenarios, ScenarioExecutionRepository executions, SimulacrumClient simulacrum) {
+    public AdminController(ScenarioTemplateRepository templates, UserScenarioRepository userScenarios, UserRepository users, ScenarioService scenarios, ScenarioExecutionRepository executions, SimulacrumClient simulacrum, AuditService audit, AuthenticationFacade auth) {
         this.templates = templates;
         this.userScenarios = userScenarios;
         this.users = users;
         this.scenarios = scenarios;
         this.executions = executions;
         this.simulacrum = simulacrum;
+        this.audit = audit;
+        this.auth = auth;
     }
 
     @PostMapping("/scenario-templates")
@@ -44,7 +54,12 @@ public class AdminController {
         t.setDescription(request.description());
         t.setPublished(request.published());
         t.setMccCodes(mccCodes);
-        return templates.save(t);
+        ScenarioTemplate saved = templates.save(t);
+        audit.record(auth.userId(), null, "SCENARIO_TEMPLATE_CREATED", "SCENARIO_TEMPLATE", saved.getScenarioId(), Map.of(
+                "scenarioTypeCode", saved.getScenarioTypeCode(),
+                "published", saved.isPublished()
+        ));
+        return saved;
     }
 
     private Set<String> normalizeMccCodes(Collection<String> mccCodes) {
@@ -72,7 +87,12 @@ public class AdminController {
         t.setPublished(request.published());
         t.getMccCodes().clear();
         t.getMccCodes().addAll(mccCodes);
-        return templates.save(t);
+        ScenarioTemplate saved = templates.save(t);
+        audit.record(auth.userId(), null, "SCENARIO_TEMPLATE_UPDATED", "SCENARIO_TEMPLATE", saved.getScenarioId(), Map.of(
+                "scenarioTypeCode", saved.getScenarioTypeCode(),
+                "published", saved.isPublished()
+        ));
+        return saved;
     }
 
     private void assertMccCodesDoNotConflict(UUID scenarioId, Set<String> mccCodes) {
@@ -89,7 +109,9 @@ public class AdminController {
     ScenarioTemplate deactivateTemplate(@PathVariable UUID id) {
         ScenarioTemplate t = templates.findById(id).orElseThrow();
         t.setPublished(false);
-        return templates.save(t);
+        ScenarioTemplate saved = templates.save(t);
+        audit.record(auth.userId(), null, "SCENARIO_TEMPLATE_DEACTIVATED", "SCENARIO_TEMPLATE", saved.getScenarioId(), Map.of("published", saved.isPublished()));
+        return saved;
     }
 
     @Transactional
@@ -102,9 +124,11 @@ public class AdminController {
         if (userScenarios.existsByTemplateScenarioId(id)) {
             t.setPublished(false);
             templates.save(t);
+            audit.record(auth.userId(), null, "SCENARIO_TEMPLATE_DEACTIVATED", "SCENARIO_TEMPLATE", t.getScenarioId(), Map.of("reason", "HAS_USER_SCENARIOS"));
             return;
         }
         templates.delete(t);
+        audit.record(auth.userId(), null, "SCENARIO_TEMPLATE_DELETED", "SCENARIO_TEMPLATE", id, Map.of("physicalDelete", true));
     }
 
     @GetMapping("/users")
@@ -116,24 +140,32 @@ public class AdminController {
     User block(@PathVariable UUID id) {
         User u = users.findById(id).orElseThrow();
         u.setStatus(UserStatus.Blocked);
-        return users.save(u);
+        User saved = users.save(u);
+        audit.record(auth.userId(), id, "USER_BLOCKED", "USER", id, Map.of("status", saved.getStatus().name()));
+        return saved;
     }
 
     @PostMapping("/users/{id}/unblock")
     User unblock(@PathVariable UUID id) {
         User u = users.findById(id).orElseThrow();
         u.setStatus(UserStatus.Active);
-        return users.save(u);
+        User saved = users.save(u);
+        audit.record(auth.userId(), id, "USER_UNBLOCKED", "USER", id, Map.of("status", saved.getStatus().name()));
+        return saved;
     }
 
     @PostMapping("/scenarios/{id}/deactivate")
     void adminDeactivate(@PathVariable UUID id) {
-        scenarios.deactivate(null, id, true);
+        scenarios.deactivate(null, id, true, auth.userId());
     }
 
     @GetMapping("/users/{id}/audit")
-    List<Map<String, String>> audit(@PathVariable UUID id) {
-        return List.of(Map.of("event", "AUDIT_STUB", "userId", id.toString()));
+    Page<AuditEvent> audit(@PathVariable UUID id,
+                           @RequestParam(defaultValue = "0") int page,
+                           @RequestParam(defaultValue = "50") int size,
+                           @RequestParam(defaultValue = "DESC") Sort.Direction direction) {
+        int boundedSize = Math.min(Math.max(size, 1), 100);
+        return audit.findByUser(id, PageRequest.of(Math.max(page, 0), boundedSize, Sort.by(direction, "createdAt")));
     }
 
     @GetMapping("/simulacrum-api-log")

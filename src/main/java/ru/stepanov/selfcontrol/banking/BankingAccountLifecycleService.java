@@ -4,10 +4,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.common.CurrencyCode;
 import ru.stepanov.selfcontrol.simulacrum.SimulacrumClient;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -15,11 +17,13 @@ public class BankingAccountLifecycleService {
     private final LinkedAccountRepository accounts;
     private final AcceptanceRepository acceptances;
     private final SimulacrumClient simulacrum;
+    private final AuditService audit;
 
-    public BankingAccountLifecycleService(LinkedAccountRepository accounts, AcceptanceRepository acceptances, SimulacrumClient simulacrum) {
+    public BankingAccountLifecycleService(LinkedAccountRepository accounts, AcceptanceRepository acceptances, SimulacrumClient simulacrum, AuditService audit) {
         this.accounts = accounts;
         this.acceptances = acceptances;
         this.simulacrum = simulacrum;
+        this.audit = audit;
     }
 
     @Transactional
@@ -45,7 +49,12 @@ public class BankingAccountLifecycleService {
         account.setPaymentToken(toPaymentToken(externalAccount));
         account.setStatus(toStatus(externalAccount.status()));
         account.setExpiresAt(null);
-        return accounts.save(account);
+        LinkedAccount saved = accounts.save(account);
+        audit.record(userId, userId, "BANK_ACCOUNT_LINKED", "LINKED_ACCOUNT", saved.getLinkedAccountId(), Map.of(
+                "externalAccountId", saved.getExternalAccountId(),
+                "status", saved.getStatus().name()
+        ));
+        return saved;
     }
 
     @Transactional
@@ -59,7 +68,12 @@ public class BankingAccountLifecycleService {
         account.setPaymentToken(null);
         account.setAcceptance(null);
         account.setExpiresAt(Instant.now());
-        return accounts.save(account);
+        LinkedAccount saved = accounts.save(account);
+        audit.record(userId, userId, "BANK_ACCOUNT_UNLINKED", "LINKED_ACCOUNT", saved.getLinkedAccountId(), Map.of(
+                "externalAccountId", saved.getExternalAccountId(),
+                "status", saved.getStatus().name()
+        ));
+        return saved;
     }
 
     @Transactional

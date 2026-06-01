@@ -7,6 +7,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.common.Money;
 import ru.stepanov.selfcontrol.simulacrum.SimulacrumClient;
 
@@ -25,12 +26,14 @@ public class AcceptanceService {
     private final LinkedAccountRepository accounts;
     private final SimulacrumClient simulacrum;
     private final ObjectMapper objectMapper;
+    private final AuditService audit;
 
-    public AcceptanceService(AcceptanceRepository acceptances, LinkedAccountRepository accounts, SimulacrumClient simulacrum, ObjectMapper objectMapper) {
+    public AcceptanceService(AcceptanceRepository acceptances, LinkedAccountRepository accounts, SimulacrumClient simulacrum, ObjectMapper objectMapper, AuditService audit) {
         this.acceptances = acceptances;
         this.accounts = accounts;
         this.simulacrum = simulacrum;
         this.objectMapper = objectMapper;
+        this.audit = audit;
     }
 
     @Transactional
@@ -56,6 +59,11 @@ public class AcceptanceService {
 
         linkedAccounts.forEach(account -> account.setAcceptance(saved));
         accounts.saveAll(linkedAccounts);
+        audit.record(userId, userId, "ACCEPTANCE_GRANTED", "ACCEPTANCE", saved.getAcceptanceId(), Map.of(
+                "linkedAccountIds", request.linkedAccountIds(),
+                "externalConsentId", saved.getExternalConsentId(),
+                "status", saved.getStatus().name()
+        ));
         return saved;
     }
 
@@ -73,7 +81,12 @@ public class AcceptanceService {
         simulacrum.revokeConsent(externalConsentId);
         acceptance.setStatus(AcceptanceStatus.Revoked);
         acceptance.setRevokedAt(Instant.now());
-        return acceptances.save(acceptance);
+        Acceptance saved = acceptances.save(acceptance);
+        audit.record(userId, userId, "ACCEPTANCE_REVOKED", "ACCEPTANCE", saved.getAcceptanceId(), Map.of(
+                "externalConsentId", saved.getExternalConsentId(),
+                "status", saved.getStatus().name()
+        ));
+        return saved;
     }
 
     public List<Acceptance> findUserAcceptances(UUID userId) {
