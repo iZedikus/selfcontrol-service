@@ -1,0 +1,1 @@
+package ru.stepanov.selfcontrol.scenario; import org.springframework.data.jpa.repository.JpaRepository; import java.util.*; public interface ScenarioExecutionRepository extends JpaRepository<ScenarioExecution,UUID>{ boolean existsByTriggerEventId(UUID triggerEventId); List<ScenarioExecution> findByUserId(UUID userId); }
