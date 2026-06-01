@@ -3,6 +3,7 @@ package ru.stepanov.selfcontrol.identity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.security.TokenService;
 
 import java.time.*;
@@ -14,12 +15,14 @@ public class AuthService {
     private final RefreshTokenRepository tokens;
     private final PasswordEncoder encoder;
     private final TokenService tokenService;
+    private final AuditService audit;
 
-    public AuthService(UserRepository users, RefreshTokenRepository tokens, PasswordEncoder encoder, TokenService tokenService) {
+    public AuthService(UserRepository users, RefreshTokenRepository tokens, PasswordEncoder encoder, TokenService tokenService, AuditService audit) {
         this.users = users;
         this.tokens = tokens;
         this.encoder = encoder;
         this.tokenService = tokenService;
+        this.audit = audit;
     }
 
     @Transactional
@@ -32,6 +35,7 @@ public class AuthService {
         u.setRole(UserRole.User);
         u.setStatus(UserStatus.Active);
         users.save(u);
+        audit.record(u.getUserId(), u.getUserId(), "USER_REGISTERED", "USER", u.getUserId(), Map.of("email", r.email()));
         return issue(u);
     }
 
@@ -42,6 +46,7 @@ public class AuthService {
         if (!encoder.matches(r.password(), u.getPasswordHash().getValue()))
             throw new IllegalArgumentException("Invalid credentials");
         u.setLastLoginAt(Instant.now());
+        audit.record(u.getUserId(), u.getUserId(), "USER_LOGIN", "USER", u.getUserId(), Map.of("email", r.email()));
         return issue(u);
     }
 

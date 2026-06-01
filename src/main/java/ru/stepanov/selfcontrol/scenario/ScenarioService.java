@@ -2,6 +2,7 @@ package ru.stepanov.selfcontrol.scenario;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.banking.*;
 import ru.stepanov.selfcontrol.common.*;
 import ru.stepanov.selfcontrol.rabbit.*;
@@ -19,14 +20,16 @@ public class ScenarioService {
     private final LinkedAccountRepository accounts;
     private final ProfileSyncPublisher publisher;
     private final UndesirablePurchasePlugin plugin;
+    private final AuditService audit;
 
-    public ScenarioService(ScenarioTemplateRepository templates, UserScenarioRepository scenarios, UndesirablePurchaseConfigRepository configs, LinkedAccountRepository accounts, ProfileSyncPublisher publisher, UndesirablePurchasePlugin plugin) {
+    public ScenarioService(ScenarioTemplateRepository templates, UserScenarioRepository scenarios, UndesirablePurchaseConfigRepository configs, LinkedAccountRepository accounts, ProfileSyncPublisher publisher, UndesirablePurchasePlugin plugin, AuditService audit) {
         this.templates = templates;
         this.scenarios = scenarios;
         this.configs = configs;
         this.accounts = accounts;
         this.publisher = publisher;
         this.plugin = plugin;
+        this.audit = audit;
     }
 
     public List<ScenarioTemplate> catalog() {
@@ -54,6 +57,10 @@ public class ScenarioService {
         scenarios.save(us);
         UndesirablePurchaseConfig cfg = saveConfig(us.getUserScenarioId(), r.undesirableConfig(), 1);
         publish(us, cfg, ProfileSyncAction.REGISTER);
+        audit.record(userId, userId, "USER_SCENARIO_ACTIVATED", "USER_SCENARIO", us.getUserScenarioId(), Map.of(
+                "templateId", t.getScenarioId(),
+                "scenarioTypeCode", t.getScenarioTypeCode()
+        ));
         return us;
     }
 
@@ -65,11 +72,20 @@ public class ScenarioService {
         UndesirablePurchaseConfig old = configs.findByUserScenarioId(id).orElseThrow();
         UndesirablePurchaseConfig cfg = saveConfig(id, r.undesirableConfig(), old.getVersion() + 1);
         publish(us, cfg, ProfileSyncAction.UPDATE_RULES);
+        audit.record(userId, userId, "USER_SCENARIO_UPDATED", "USER_SCENARIO", us.getUserScenarioId(), Map.of(
+                "configVersion", cfg.getVersion(),
+                "debitConfigChanged", r.debitConfig() != null
+        ));
         return us;
     }
 
     @Transactional
     public void deactivate(UUID userId, UUID id, boolean terminate) {
+        deactivate(userId, id, terminate, userId);
+    }
+
+    @Transactional
+    public void deactivate(UUID userId, UUID id, boolean terminate, UUID actorUserId) {
         UserScenario us = scenarios.findById(id).orElseThrow();
         if (userId != null && !us.getUserId().equals(userId)) throw new IllegalArgumentException("Forbidden scenario");
         us.setActive(false);
@@ -77,6 +93,10 @@ public class ScenarioService {
         if (us.getOracleSubscriptionRef() != null)
             us.getOracleSubscriptionRef().setStatus(terminate ? OracleSubscriptionStatus.Terminated : OracleSubscriptionStatus.Paused);
         configs.findByUserScenarioId(id).ifPresent(c -> publish(us, c, terminate ? ProfileSyncAction.TERMINATE : ProfileSyncAction.PAUSE));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("terminate", terminate);
+        payload.put("oracleStatus", us.getOracleSubscriptionRef() == null ? null : us.getOracleSubscriptionRef().getStatus().name());
+        audit.record(actorUserId, us.getUserId(), userId == null ? "USER_SCENARIO_FORCE_DEACTIVATED" : "USER_SCENARIO_DEACTIVATED", "USER_SCENARIO", us.getUserScenarioId(), payload);
     }
 
     private DebitConfig toDebitConfig(DebitConfigDto d) {
