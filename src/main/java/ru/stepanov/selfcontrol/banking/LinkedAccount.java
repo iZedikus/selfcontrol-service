@@ -17,6 +17,8 @@ public class LinkedAccount {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "acceptance_id")
     private Acceptance acceptance;
+    @Column(name = "external_account_id")
+    private String externalAccountId;
     private String displayName;
     @Column(name = "masked_pan")
     private String maskedPAN;
@@ -24,6 +26,8 @@ public class LinkedAccount {
     private PaymentToken paymentToken;
     @Embedded
     private BankBIC bankBIC;
+    @Column(name = "bank_name")
+    private String bankName;
     @Enumerated(EnumType.STRING)
     private CurrencyCode currency = CurrencyCode.RUB;
     private Instant linkedAt;
@@ -62,6 +66,14 @@ public class LinkedAccount {
         this.acceptance = acceptance;
     }
 
+    public String getExternalAccountId() {
+        return externalAccountId;
+    }
+
+    public void setExternalAccountId(String externalAccountId) {
+        this.externalAccountId = externalAccountId;
+    }
+
     public String getDisplayName() {
         return displayName;
     }
@@ -92,6 +104,14 @@ public class LinkedAccount {
 
     public void setBankBIC(BankBIC bankBIC) {
         this.bankBIC = bankBIC;
+    }
+
+    public String getBankName() {
+        return bankName;
+    }
+
+    public void setBankName(String bankName) {
+        this.bankName = bankName;
     }
 
     public CurrencyCode getCurrency() {

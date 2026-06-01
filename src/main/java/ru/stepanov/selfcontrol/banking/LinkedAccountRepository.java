@@ -6,4 +6,6 @@ import java.util.*;
 
 public interface LinkedAccountRepository extends JpaRepository<LinkedAccount, UUID> {
     List<LinkedAccount> findByUserId(UUID userId);
+
+    Optional<LinkedAccount> findByUserIdAndExternalAccountId(UUID userId, String externalAccountId);
 }

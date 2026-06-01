@@ -10,11 +10,13 @@ import java.util.*;
 public class BankingController {
     private final LinkedAccountRepository accounts;
     private final AcceptanceRepository acceptances;
+    private final BankingAccountLifecycleService accountLifecycle;
     private final AuthenticationFacade auth;
 
-    public BankingController(LinkedAccountRepository accounts, AcceptanceRepository acceptances, AuthenticationFacade auth) {
+    public BankingController(LinkedAccountRepository accounts, AcceptanceRepository acceptances, BankingAccountLifecycleService accountLifecycle, AuthenticationFacade auth) {
         this.accounts = accounts;
         this.acceptances = acceptances;
+        this.accountLifecycle = accountLifecycle;
         this.auth = auth;
     }
 
@@ -24,9 +26,16 @@ public class BankingController {
     }
 
     @PostMapping("/accounts")
-    LinkedAccount add(@RequestBody LinkedAccount a) {
-        a.setUserId(auth.userId());
-        return accounts.save(a);
+    LinkedAccount add(@RequestBody LinkAccountRequest request) {
+        return accountLifecycle.linkAccount(auth.userId(), request.accountId());
+    }
+
+    @DeleteMapping("/accounts/{id}")
+    LinkedAccount unlink(@PathVariable UUID id) {
+        return accountLifecycle.unlinkAccount(auth.userId(), id);
+    }
+
+    public record LinkAccountRequest(String accountId) {
     }
 
     @GetMapping("/acceptances")
