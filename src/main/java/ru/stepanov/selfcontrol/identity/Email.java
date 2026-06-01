@@ -1,0 +1,1 @@
+package ru.stepanov.selfcontrol.identity; import jakarta.persistence.*; @Embeddable public class Email{ @Column(name="email",nullable=false,unique=true) private String value; public Email(){} public Email(String v){value=v;} public String getValue(){return value;} public void setValue(String value){this.value=value;} }
