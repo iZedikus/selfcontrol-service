@@ -1,8 +1,6 @@
 package ru.stepanov.selfcontrol.banking;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,7 +11,6 @@ import ru.stepanov.selfcontrol.simulacrum.SimulacrumClient;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -25,14 +22,12 @@ public class AcceptanceService {
     private final AcceptanceRepository acceptances;
     private final LinkedAccountRepository accounts;
     private final SimulacrumClient simulacrum;
-    private final ObjectMapper objectMapper;
     private final AuditService audit;
 
-    public AcceptanceService(AcceptanceRepository acceptances, LinkedAccountRepository accounts, SimulacrumClient simulacrum, ObjectMapper objectMapper, AuditService audit) {
+    public AcceptanceService(AcceptanceRepository acceptances, LinkedAccountRepository accounts, SimulacrumClient simulacrum, AuditService audit) {
         this.acceptances = acceptances;
         this.accounts = accounts;
         this.simulacrum = simulacrum;
-        this.objectMapper = objectMapper;
         this.audit = audit;
     }
 
@@ -40,9 +35,9 @@ public class AcceptanceService {
     public Acceptance grant(UUID userId, GrantAcceptanceRequest request) {
         validateGrantRequest(request);
         List<LinkedAccount> linkedAccounts = loadActiveUserAccounts(userId, request.linkedAccountIds());
-        Object simulacrumResponse = simulacrum.grantConsent(buildGrantConsentBody(userId, request, linkedAccounts));
-        JsonNode response = toJsonNode(simulacrumResponse, "grant consent");
-        String externalConsentId = firstText(response, "consentId", "externalConsentId", "pdaId", "pdaID", "id");
+        SimulacrumClient.GrantConsentResponse simulacrumResponse = simulacrum.grantConsent(userId, buildGrantConsentBody(userId, request, linkedAccounts));
+        JsonNode response = simulacrumResponse.raw();
+        String externalConsentId = simulacrumResponse.consentId();
         if (externalConsentId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Simulacrum grant consent response does not contain consent id");
         }
@@ -77,8 +72,7 @@ public class AcceptanceService {
         if (acceptance.getStatus() != AcceptanceStatus.Active) {
             return acceptance;
         }
-        UUID externalConsentId = parseExternalConsentId(acceptance.getExternalConsentId());
-        simulacrum.revokeConsent(externalConsentId);
+        simulacrum.revokeConsent(userId, acceptance.getExternalConsentId());
         acceptance.setStatus(AcceptanceStatus.Revoked);
         acceptance.setRevokedAt(Instant.now());
         Acceptance saved = acceptances.save(acceptance);
@@ -124,77 +118,44 @@ public class AcceptanceService {
         return linkedAccountIds.stream().map(byId::get).toList();
     }
 
-    private Map<String, Object> buildGrantConsentBody(UUID userId, GrantAcceptanceRequest request, List<LinkedAccount> linkedAccounts) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("userId", userId);
-        body.put("linkedAccountIds", request.linkedAccountIds());
-        body.put("accounts", linkedAccounts.stream().map(this::accountBody).toList());
-        body.put("limits", limitsBody(request.acceptanceLimit()));
-        body.put("expiresAt", request.expiresAt());
-        body.put("purpose", request.purpose());
-        body.put("permissions", request.permissions() == null ? List.of() : request.permissions());
-        if (request.simulacrumParams() != null && !request.simulacrumParams().isEmpty()) {
-            body.put("parameters", request.simulacrumParams());
-        }
-        return body;
+    private SimulacrumClient.GrantConsentRequest buildGrantConsentBody(UUID userId, GrantAcceptanceRequest request, List<LinkedAccount> linkedAccounts) {
+        return new SimulacrumClient.GrantConsentRequest(
+                userId,
+                request.linkedAccountIds(),
+                linkedAccounts.stream().map(this::accountBody).toList(),
+                limitsBody(request.acceptanceLimit()),
+                request.expiresAt(),
+                request.purpose(),
+                request.permissions() == null ? List.of() : request.permissions(),
+                request.simulacrumParams() == null || request.simulacrumParams().isEmpty() ? null : request.simulacrumParams()
+        );
     }
 
-    private Map<String, Object> accountBody(LinkedAccount account) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("linkedAccountId", account.getLinkedAccountId());
-        body.put("externalAccountId", account.getExternalAccountId());
-        body.put("displayName", account.getDisplayName());
-        body.put("maskedPan", account.getMaskedPAN());
-        body.put("currency", account.getCurrency());
-        body.put("paymentToken", account.getPaymentToken() == null ? null : account.getPaymentToken().getValue());
-        body.put("bankBic", account.getBankBIC() == null ? null : account.getBankBIC().getValue());
-        body.put("bankName", account.getBankName());
-        return body;
+    private SimulacrumClient.ConsentAccount accountBody(LinkedAccount account) {
+        return new SimulacrumClient.ConsentAccount(
+                account.getLinkedAccountId().toString(),
+                account.getExternalAccountId(),
+                account.getDisplayName(),
+                account.getMaskedPAN(),
+                account.getCurrency() == null ? null : account.getCurrency().name(),
+                account.getPaymentToken() == null ? null : account.getPaymentToken().getValue(),
+                account.getBankBIC() == null ? null : account.getBankBIC().getValue(),
+                account.getBankName()
+        );
     }
 
-    private Map<String, Object> limitsBody(AcceptanceLimit limit) {
+    private SimulacrumClient.AcceptanceLimits limitsBody(AcceptanceLimit limit) {
         if (limit == null) {
-            return Map.of();
+            return new SimulacrumClient.AcceptanceLimits(null, null);
         }
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("totalDebitLimit", moneyBody(limit.getTotalDebitLimit()));
-        body.put("maxSingleDebit", moneyBody(limit.getMaxSingleDebit()));
-        return body;
+        return new SimulacrumClient.AcceptanceLimits(moneyBody(limit.getTotalDebitLimit()), moneyBody(limit.getMaxSingleDebit()));
     }
 
-    private Map<String, Object> moneyBody(Money money) {
+    private SimulacrumClient.MoneyDto moneyBody(Money money) {
         if (money == null) {
             return null;
         }
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("amount", money.getAmount());
-        body.put("currency", money.getCurrency());
-        return body;
-    }
-
-    private UUID parseExternalConsentId(String externalConsentId) {
-        if (externalConsentId == null || externalConsentId.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Acceptance has no external consent id");
-        }
-        try {
-            return UUID.fromString(externalConsentId);
-        } catch (IllegalArgumentException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Acceptance external consent id is not a UUID", e);
-        }
-    }
-
-    private JsonNode toJsonNode(Object value, String operation) {
-        if (value == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Empty Simulacrum " + operation + " response");
-        }
-        try {
-            if (value instanceof String text) {
-                return objectMapper.readTree(text.isBlank() ? "{}" : text);
-            }
-            return objectMapper.valueToTree(value);
-        } catch (JsonProcessingException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Invalid Simulacrum " + operation + " response", e);
-        }
+        return new SimulacrumClient.MoneyDto(money.getAmount(), money.getCurrency() == null ? null : money.getCurrency().name());
     }
 
     private String firstText(JsonNode root, String... names) {
