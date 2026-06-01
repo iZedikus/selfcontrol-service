@@ -57,26 +57,44 @@ public class TriggerEventService {
                     m.debitConfig().recipientPaymentToken(),
                     new SimulacrumClient.MoneyDto(new BigDecimal(m.debitConfig().debitAmount()), m.debitConfig().currency())
             ));
-            op.setExternalTransactionID(response.transactionId() == null ? "IS-DEBIT-" + m.triggerEventId() : response.transactionId());
-            op.setCompletedAt(Instant.now());
-            e.setCompletedAt(Instant.now());
-            if (isDebitFailure(response.status())) {
-                op.setStatus(ExecutionStatus.DebitFailed);
-                op.setFailure(new Failure(response.code() == null ? "SIMULACRUM_DEBIT_FAILED" : response.code(), response.message()));
-                e.setStatus(ExecutionStatus.DebitFailed);
-            } else {
-                op.setStatus(ExecutionStatus.DebitCompleted);
-                e.setStatus(ExecutionStatus.DebitCompleted);
-            }
+            applySimulacrumResponse(e, op, response);
         } catch (Exception ex) {
-            op.setExternalTransactionID("IS-DEBIT-" + m.triggerEventId());
             op.setStatus(ExecutionStatus.DebitFailed);
-            op.setCompletedAt(Instant.now());
             op.setFailure(new Failure(ex.getClass().getSimpleName(), ex.getMessage()));
             e.setStatus(ExecutionStatus.DebitFailed);
-            e.setCompletedAt(Instant.now());
         }
         return executions.save(e);
+    }
+
+    private void applySimulacrumResponse(ScenarioExecution e, DebitOperation op, SimulacrumClient.InitiateDebitResponse response) {
+        Instant completedAt = Instant.now();
+        op.setCompletedAt(completedAt);
+        e.setCompletedAt(completedAt);
+
+        if (response == null) {
+            markDebitFailed(e, op, new Failure("SIMULACRUM_DEBIT_EMPTY_RESPONSE", "Simulacrum debit response is empty"));
+            return;
+        }
+
+        op.setExternalTransactionID(response.transactionId());
+        if (isDebitFailure(response.status())) {
+            markDebitFailed(e, op, new Failure(response.code() == null ? "SIMULACRUM_DEBIT_FAILED" : response.code(), response.message()));
+            return;
+        }
+
+        if (response.transactionId() == null || response.transactionId().isBlank()) {
+            markDebitFailed(e, op, new Failure("SIMULACRUM_DEBIT_MISSING_TRANSACTION_ID", "Simulacrum debit response does not contain transaction id"));
+            return;
+        }
+
+        op.setStatus(ExecutionStatus.DebitCompleted);
+        e.setStatus(ExecutionStatus.DebitCompleted);
+    }
+
+    private void markDebitFailed(ScenarioExecution e, DebitOperation op, Failure failure) {
+        op.setStatus(ExecutionStatus.DebitFailed);
+        op.setFailure(failure);
+        e.setStatus(ExecutionStatus.DebitFailed);
     }
 
     private boolean isDebitFailure(String status) {
