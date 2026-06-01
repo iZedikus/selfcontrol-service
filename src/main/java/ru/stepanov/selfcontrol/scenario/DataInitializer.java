@@ -21,12 +21,13 @@ public class DataInitializer implements CommandLineRunner {
     }
 
     public void run(String... args) {
-        templates.findByScenarioTypeCode(UndesirablePurchasePlugin.SCENARIO_TYPE_CODE).orElseGet(() -> {
+        templates.findFirstByScenarioTypeCode(UndesirablePurchasePlugin.SCENARIO_TYPE_CODE).orElseGet(() -> {
             ScenarioTemplate t = new ScenarioTemplate();
             t.setScenarioTypeCode(UndesirablePurchasePlugin.SCENARIO_TYPE_CODE);
             t.setName("Нежелательные покупки");
             t.setDescription("Списывает заданную сумму при обнаружении покупки по MCC/merchant rules");
             t.setPublished(true);
+            t.setMccCodes(new LinkedHashSet<>(List.of("5813", "5814", "5912", "5921", "5993")));
             return templates.save(t);
         });
         if (!users.existsByEmail_Value("admin@selfcontrol.local")) {

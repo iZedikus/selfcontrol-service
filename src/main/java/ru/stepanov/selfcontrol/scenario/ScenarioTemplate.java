@@ -11,12 +11,16 @@ public class ScenarioTemplate {
     @Id
     @Column(name = "scenario_id")
     private UUID scenarioId;
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false)
     private String scenarioTypeCode;
     private String name;
     @Column(length = 2000)
     private String description;
     private boolean published;
+    @ElementCollection
+    @CollectionTable(name = "scenario_template_mcc_codes", joinColumns = @JoinColumn(name = "scenario_id"))
+    @Column(name = "mcc_code", length = 4, nullable = false)
+    private Set<String> mccCodes = new LinkedHashSet<>();
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -69,6 +73,14 @@ public class ScenarioTemplate {
 
     public void setPublished(boolean published) {
         this.published = published;
+    }
+
+    public Set<String> getMccCodes() {
+        return mccCodes;
+    }
+
+    public void setMccCodes(Set<String> mccCodes) {
+        this.mccCodes = mccCodes == null ? new LinkedHashSet<>() : mccCodes;
     }
 
     public Instant getCreatedAt() {
