@@ -3,6 +3,9 @@ package ru.stepanov.selfcontrol.identity;
 import org.springframework.web.bind.annotation.*;
 import ru.stepanov.selfcontrol.security.AuthenticationFacade;
 
+import java.time.Instant;
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/api/v1/profile")
 public class ProfileController {
@@ -15,13 +18,13 @@ public class ProfileController {
     }
 
     @GetMapping
-    User me() {
-        return profiles.get(auth.userId());
+    ProfileResponse me() {
+        return ProfileResponse.from(profiles.get(auth.userId()));
     }
 
     @PatchMapping
-    User update(@RequestBody UpdateProfileRequest r) {
-        return profiles.update(auth.userId(), r);
+    ProfileResponse update(@RequestBody UpdateProfileRequest r) {
+        return ProfileResponse.from(profiles.update(auth.userId(), r));
     }
 
     @DeleteMapping
@@ -31,5 +34,25 @@ public class ProfileController {
 
     public record UpdateProfileRequest(String phoneNumber, String firstName, String middleName, String lastName,
                                        String additionalContact) {
+    }
+
+    public record ProfileResponse(UUID userId, String email, String phoneNumber, String firstName, String middleName,
+                                  String lastName, String additionalContact, String role, String status,
+                                  Instant createdAt, Instant updatedAt, Instant lastLoginAt) {
+        static ProfileResponse from(User user) {
+            return new ProfileResponse(
+                    user.getUserId(),
+                    user.getEmail() == null ? null : user.getEmail().getValue(),
+                    user.getPhoneNumber() == null ? null : user.getPhoneNumber().getValue(),
+                    user.getFirstName(),
+                    user.getMiddleName(),
+                    user.getLastName(),
+                    user.getAdditionalContact(),
+                    user.getRole() == null ? null : user.getRole().name(),
+                    user.getStatus() == null ? null : user.getStatus().name(),
+                    user.getCreatedAt(),
+                    user.getUpdatedAt(),
+                    user.getLastLoginAt());
+        }
     }
 }
