@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import ru.stepanov.selfcontrol.audit.AuditEvent;
+import ru.stepanov.selfcontrol.common.Money;
 import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.identity.*;
 import ru.stepanov.selfcontrol.security.AuthenticationFacade;
@@ -135,26 +136,26 @@ public class AdminController {
     }
 
     @GetMapping("/users")
-    List<User> users() {
-        return users.findAll();
+    List<AdminUserResponse> users() {
+        return users.findAll().stream().map(AdminUserResponse::from).toList();
     }
 
     @PostMapping("/users/{id}/block")
-    User block(@PathVariable UUID id) {
+    AdminUserResponse block(@PathVariable UUID id) {
         User u = users.findById(id).orElseThrow();
         u.setStatus(UserStatus.Blocked);
         User saved = users.save(u);
         audit.record(auth.userId(), id, "USER_BLOCKED", "USER", id, Map.of("status", saved.getStatus().name()));
-        return saved;
+        return AdminUserResponse.from(saved);
     }
 
     @PostMapping("/users/{id}/unblock")
-    User unblock(@PathVariable UUID id) {
+    AdminUserResponse unblock(@PathVariable UUID id) {
         User u = users.findById(id).orElseThrow();
         u.setStatus(UserStatus.Active);
         User saved = users.save(u);
         audit.record(auth.userId(), id, "USER_UNBLOCKED", "USER", id, Map.of("status", saved.getStatus().name()));
-        return saved;
+        return AdminUserResponse.from(saved);
     }
 
     @PostMapping("/scenarios/{id}/deactivate")
@@ -210,12 +211,64 @@ public class AdminController {
     }
 
     @GetMapping("/oracle-trigger-log")
-    List<ScenarioExecution> oracleLog() {
-        return executions.findAll();
+    List<ScenarioExecutionResponse> oracleLog() {
+        return executions.findAll().stream().map(ScenarioExecutionResponse::from).toList();
     }
 
     @GetMapping("/statistics")
     Map<UUID, Long> statistics() {
         return executions.findAll().stream().collect(Collectors.groupingBy(ScenarioExecution::getUserScenarioId, Collectors.counting()));
+    }
+
+    public record ScenarioExecutionResponse(UUID executionId, UUID userScenarioId, UUID userId, UUID triggerEventId,
+                                            String status, Instant triggeredAt, Instant completedAt,
+                                            TriggerSnapshot triggerSnapshot, List<DebitOperationResponse> debitOperations) {
+        static ScenarioExecutionResponse from(ScenarioExecution execution) {
+            return new ScenarioExecutionResponse(
+                    execution.getExecutionId(),
+                    execution.getUserScenarioId(),
+                    execution.getUserId(),
+                    execution.getTriggerEventId(),
+                    execution.getStatus() == null ? null : execution.getStatus().name(),
+                    execution.getTriggeredAt(),
+                    execution.getCompletedAt(),
+                    execution.getTriggerSnapshot(),
+                    execution.getDebitOperations().stream().map(DebitOperationResponse::from).toList());
+        }
+    }
+
+    public record DebitOperationResponse(UUID debitOperationId, String externalTransactionID, Money amount,
+                                         Instant initiatedAt, Instant completedAt, String status, Failure failure) {
+        static DebitOperationResponse from(DebitOperation operation) {
+            return new DebitOperationResponse(
+                    operation.getDebitOperationId(),
+                    operation.getExternalTransactionID(),
+                    operation.getAmount(),
+                    operation.getInitiatedAt(),
+                    operation.getCompletedAt(),
+                    operation.getStatus() == null ? null : operation.getStatus().name(),
+                    operation.getFailure());
+        }
+    }
+
+    public record AdminUserResponse(UUID userId, String email, String phoneNumber, String firstName, String middleName,
+                                    String lastName, String additionalContact, String role, String status,
+                                    Instant createdAt, Instant updatedAt, Instant lastLoginAt, Instant deletedAt) {
+        static AdminUserResponse from(User user) {
+            return new AdminUserResponse(
+                    user.getUserId(),
+                    user.getEmail() == null ? null : user.getEmail().getValue(),
+                    user.getPhoneNumber() == null ? null : user.getPhoneNumber().getValue(),
+                    user.getFirstName(),
+                    user.getMiddleName(),
+                    user.getLastName(),
+                    user.getAdditionalContact(),
+                    user.getRole() == null ? null : user.getRole().name(),
+                    user.getStatus() == null ? null : user.getStatus().name(),
+                    user.getCreatedAt(),
+                    user.getUpdatedAt(),
+                    user.getLastLoginAt(),
+                    user.getDeletedAt());
+        }
     }
 }
