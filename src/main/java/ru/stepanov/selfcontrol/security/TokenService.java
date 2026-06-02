@@ -29,11 +29,13 @@ public class TokenService {
     public Optional<AuthUser> parse(String token) {
         try {
             String[] p = token.split("\\.");
+            if (p.length != 2) return Optional.empty();
             String payload = new String(Base64.getUrlDecoder().decode(p[0]), StandardCharsets.UTF_8);
             if (!sign(payload).equals(p[1])) return Optional.empty();
             String[] parts = payload.split(":");
+            if (parts.length != 3) return Optional.empty();
             if (Long.parseLong(parts[2]) < Instant.now().getEpochSecond()) return Optional.empty();
-            return Optional.of(new AuthUser(UUID.fromString(parts[0]), UserRole.valueOf(parts[1])));
+            return Optional.of(new AuthUser(UUID.fromString(parts[0]), UserRole.fromTokenClaim(parts[1])));
         } catch (Exception e) {
             return Optional.empty();
         }
