@@ -10,6 +10,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SecurityConfigTest {
     @Test
+    void adminPathsUseCanonicalAdminAuthorityConstant() {
+        assertEquals("ROLE_ADMIN", ru.stepanov.selfcontrol.identity.UserRole.Admin.authority());
+    }
+
+    @Test
     void corsConfigurationAllowsAuthorizationPreflightForProtectedApi() {
         SecurityConfig config = new SecurityConfig();
         MockHttpServletRequest request = new MockHttpServletRequest("OPTIONS", "/api/v1/profile");
