@@ -1,5 +1,6 @@
 package ru.stepanov.selfcontrol.simulacrum;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -17,6 +18,7 @@ public class DebitStatusPoller {
     private final SimulacrumClient simulacrum;
     private final Sleeper sleeper;
 
+    @Autowired
     public DebitStatusPoller(SimulacrumClient simulacrum) {
         this(simulacrum, duration -> {
             try {
@@ -28,7 +30,11 @@ public class DebitStatusPoller {
         });
     }
 
-    DebitStatusPoller(SimulacrumClient simulacrum, Sleeper sleeper) {
+    static DebitStatusPoller createForTesting(SimulacrumClient simulacrum, Sleeper sleeper) {
+        return new DebitStatusPoller(simulacrum, sleeper);
+    }
+
+    private DebitStatusPoller(SimulacrumClient simulacrum, Sleeper sleeper) {
         this.simulacrum = simulacrum;
         this.sleeper = sleeper;
     }

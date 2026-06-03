@@ -32,7 +32,7 @@ class DebitStatusPollerTest {
             };
         });
 
-        DebitStatusPoller poller = new DebitStatusPoller(simulacrum, duration -> { });
+        DebitStatusPoller poller = DebitStatusPoller.createForTesting(simulacrum, duration -> { });
         PaymentStatusResponse result = poller.pollUntilFinal(userId, "TX-1");
 
         assertEquals(DebitStatuses.COMPLETED, result.status());
@@ -44,7 +44,7 @@ class DebitStatusPollerTest {
         when(simulacrum.getDebitStatus(userId, "TX-2"))
                 .thenReturn(new PaymentStatusResponse("TX-2", DebitStatuses.REJECTED, "INSUFFICIENT_FUNDS", "Low balance"));
 
-        DebitStatusPoller poller = new DebitStatusPoller(simulacrum, duration -> { });
+        DebitStatusPoller poller = DebitStatusPoller.createForTesting(simulacrum, duration -> { });
         PaymentStatusResponse result = poller.pollUntilFinal(userId, "TX-2");
 
         assertEquals(DebitStatuses.REJECTED, result.status());
@@ -58,7 +58,7 @@ class DebitStatusPollerTest {
         when(simulacrum.getDebitStatus(userId, "TX-3"))
                 .thenReturn(new PaymentStatusResponse("TX-3", DebitStatuses.PENDING, null, null));
 
-        DebitStatusPoller poller = new DebitStatusPoller(simulacrum, duration -> { });
+        DebitStatusPoller poller = DebitStatusPoller.createForTesting(simulacrum, duration -> { });
 
         DebitStatusPollingException ex = assertThrows(DebitStatusPollingException.class,
                 () -> poller.pollUntilFinal(userId, "TX-3"));
@@ -75,7 +75,7 @@ class DebitStatusPollerTest {
                 .thenReturn(new PaymentStatusResponse("TX-4", DebitStatuses.COMPLETED, null, null));
 
         AtomicInteger sleeps = new AtomicInteger();
-        DebitStatusPoller poller = new DebitStatusPoller(simulacrum, duration -> sleeps.incrementAndGet());
+        DebitStatusPoller poller = DebitStatusPoller.createForTesting(simulacrum, duration -> sleeps.incrementAndGet());
 
         poller.pollUntilFinal(userId, "TX-4");
 
