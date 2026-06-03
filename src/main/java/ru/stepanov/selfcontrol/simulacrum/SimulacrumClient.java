@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
@@ -28,6 +29,7 @@ public class SimulacrumClient {
     private final SimulacrumApiLogRepository apiLogRepository;
     private final String creditorSystemId;
 
+    @Autowired
     public SimulacrumClient(@Value("${simulacrum.base-url:http://localhost:8081}") String baseUrl,
                             ObjectMapper objectMapper,
                             SimulacrumApiLogService apiLogService,
@@ -36,11 +38,19 @@ public class SimulacrumClient {
         this(RestClient.builder().baseUrl(baseUrl).build(), objectMapper, apiLogService, apiLogRepository, isProperties);
     }
 
-    SimulacrumClient(RestClient rest,
-                     ObjectMapper objectMapper,
-                     SimulacrumApiLogService apiLogService,
-                     SimulacrumApiLogRepository apiLogRepository,
-                     IsProperties isProperties) {
+    static SimulacrumClient createForTesting(RestClient rest,
+                                             ObjectMapper objectMapper,
+                                             SimulacrumApiLogService apiLogService,
+                                             SimulacrumApiLogRepository apiLogRepository,
+                                             IsProperties isProperties) {
+        return new SimulacrumClient(rest, objectMapper, apiLogService, apiLogRepository, isProperties);
+    }
+
+    private SimulacrumClient(RestClient rest,
+                               ObjectMapper objectMapper,
+                               SimulacrumApiLogService apiLogService,
+                               SimulacrumApiLogRepository apiLogRepository,
+                               IsProperties isProperties) {
         this.rest = rest;
         this.objectMapper = objectMapper;
         this.apiLogService = apiLogService;

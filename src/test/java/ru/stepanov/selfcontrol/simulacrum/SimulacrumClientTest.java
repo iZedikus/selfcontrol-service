@@ -40,7 +40,7 @@ class SimulacrumClientTest {
         RestClient.Builder restBuilder = RestClient.builder().baseUrl("http://simulacrum:8081");
         server = MockRestServiceServer.bindTo(restBuilder).build();
         RestClient restClient = restBuilder.build();
-        client = new SimulacrumClient(
+        client = SimulacrumClient.createForTesting(
                 restClient,
                 new JacksonConfig().objectMapper(),
                 apiLogService,
