@@ -1,0 +1,797 @@
+openapi: 3.0.3
+
+info:
+  title: "IS — Система безакцептных списаний"
+  version: "1.0.0"
+  description: |
+    REST API информационной системы (IS) по REST_КОНТРАКТ.yaml.
+    Секции [IS / Auth], [IS / Accounts], [IS / Consents], [IS / Scenarios],
+    [IS / Executions], [IS / Notifications], [IS / Admin].
+
+servers:
+  - url: "http://is:8080"
+    description: "IS — основная информационная система"
+
+tags:
+  - name: "IS / Auth"
+  - name: "IS / Accounts"
+  - name: "IS / Consents"
+  - name: "IS / Scenarios"
+  - name: "IS / Executions"
+  - name: "IS / Notifications"
+  - name: "IS / Admin"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [status, error, message, timestamp]
+      properties:
+        status:
+          type: integer
+          example: 404
+        error:
+          type: string
+          example: "NOT_FOUND"
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-05-25T10:00:00.000Z"
+
+    PageMeta:
+      type: object
+      required: [page, size, totalElements, totalPages]
+      properties:
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+        userId:
+          type: string
+          format: uuid
+
+    LinkedAccountResponse:
+      type: object
+      properties:
+        linkedAccountId:
+          type: string
+          format: uuid
+        maskedPan:
+          type: string
+        bankBic:
+          type: string
+        displayName:
+          type: string
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [PendingVerification, Active, Revoked, Expired]
+        linkedAt:
+          type: string
+          format: date-time
+
+    ConsentResponse:
+      type: object
+      properties:
+        consentId:
+          type: string
+          format: uuid
+        linkedAccountId:
+          type: string
+          format: uuid
+        externalConsentId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [Pending, Active, Revoked, Expired]
+        totalDebitLimit:
+          type: string
+        maxSingleDebit:
+          type: string
+          nullable: true
+        currency:
+          type: string
+        grantedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    ScenarioTemplateResponse:
+      type: object
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        scenarioTypeCode:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        isPublished:
+          type: boolean
+
+    UserScenarioResponse:
+      type: object
+      properties:
+        userScenarioId:
+          type: string
+          format: uuid
+        templateId:
+          type: string
+          format: uuid
+        scenarioTypeCode:
+          type: string
+        linkedAccountId:
+          type: string
+          format: uuid
+        debitAmount:
+          type: string
+        currency:
+          type: string
+        isActive:
+          type: boolean
+        activatedAt:
+          type: string
+          format: date-time
+        lastTriggeredAt:
+          type: string
+          format: date-time
+          nullable: true
+        scenarioConfig:
+          type: object
+
+    ExecutionResponse:
+      type: object
+      properties:
+        executionId:
+          type: string
+          format: uuid
+        userScenarioId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [Pending, DebitInitiated, Completed, Failed]
+        triggerSnapshot:
+          type: object
+        debitOperation:
+          type: object
+          nullable: true
+        triggeredAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    NotificationResponse:
+      type: object
+      properties:
+        notificationId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [ScenarioTriggered, DebitCompleted, DebitFailed, ConsentExpiringSoon, ConsentRevoked]
+        payload:
+          type: object
+        isRead:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/v1/auth/register:
+    post:
+      tags: ["IS / Auth"]
+      summary: "Регистрация пользователя"
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, firstName, lastName, phoneNumber]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+                phoneNumber:
+                  type: string
+      responses:
+        "201":
+          description: "Пользователь зарегистрирован"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: "Ошибка валидации"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: "Email уже зарегистрирован"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/auth/login:
+    post:
+      tags: ["IS / Auth"]
+      summary: "Получить JWT токен"
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/auth/refresh:
+    post:
+      tags: ["IS / Auth"]
+      summary: "Обновить access token"
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/accounts:
+    get:
+      tags: ["IS / Accounts"]
+      summary: "Получить список привязанных счетов"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LinkedAccountResponse"
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: ["IS / Accounts"]
+      summary: "Привязать банковский счёт"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paymentToken, bankBic, currency, displayName]
+              properties:
+                paymentToken:
+                  type: string
+                bankBic:
+                  type: string
+                currency:
+                  type: string
+                displayName:
+                  type: string
+                maskedPan:
+                  type: string
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkedAccountResponse"
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/accounts/{linkedAccountId}:
+    delete:
+      tags: ["IS / Accounts"]
+      summary: "Отвязать счёт"
+      parameters:
+        - name: linkedAccountId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: "Счёт отвязан"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/accounts/{linkedAccountId}/consent:
+    post:
+      tags: ["IS / Consents"]
+      summary: "Выдать акцепт на списание"
+      parameters:
+        - name: linkedAccountId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [totalDebitLimit, currency]
+              properties:
+                totalDebitLimit:
+                  type: string
+                maxSingleDebit:
+                  type: string
+                  nullable: true
+                currency:
+                  type: string
+                expiresAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentResponse"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: ["IS / Consents"]
+      summary: "Отозвать акцепт"
+      parameters:
+        - name: linkedAccountId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: "Акцепт отозван"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/scenarios/templates:
+    get:
+      tags: ["IS / Scenarios"]
+      summary: "Получить каталог доступных сценариев"
+      security: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScenarioTemplateResponse"
+
+  /api/v1/scenarios:
+    get:
+      tags: ["IS / Scenarios"]
+      summary: "Получить список активных сценариев пользователя"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserScenarioResponse"
+    post:
+      tags: ["IS / Scenarios"]
+      summary: "Активировать сценарий"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [templateId, linkedAccountId, debitAmount, currency, recipientPaymentToken]
+              properties:
+                templateId:
+                  type: string
+                  format: uuid
+                linkedAccountId:
+                  type: string
+                  format: uuid
+                debitAmount:
+                  type: string
+                currency:
+                  type: string
+                recipientPaymentToken:
+                  type: string
+                scenarioConfig:
+                  type: object
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserScenarioResponse"
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/scenarios/{userScenarioId}:
+    put:
+      tags: ["IS / Scenarios"]
+      summary: "Обновить конфигурацию сценария"
+      parameters:
+        - name: userScenarioId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                debitAmount:
+                  type: string
+                recipientPaymentToken:
+                  type: string
+                scenarioConfig:
+                  type: object
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserScenarioResponse"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: ["IS / Scenarios"]
+      summary: "Деактивировать сценарий"
+      parameters:
+        - name: userScenarioId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: "Сценарий деактивирован"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/scenarios/{userScenarioId}/executions:
+    get:
+      tags: ["IS / Executions"]
+      summary: "История срабатываний сценария"
+      parameters:
+        - name: userScenarioId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ExecutionResponse"
+                  meta:
+                    $ref: "#/components/schemas/PageMeta"
+
+  /api/v1/executions/{executionId}:
+    get:
+      tags: ["IS / Executions"]
+      summary: "Получить одно срабатывание"
+      parameters:
+        - name: executionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionResponse"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/notifications:
+    get:
+      tags: ["IS / Notifications"]
+      summary: "Получить уведомления пользователя"
+      parameters:
+        - name: unreadOnly
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NotificationResponse"
+                  meta:
+                    $ref: "#/components/schemas/PageMeta"
+
+  /api/v1/notifications/{notificationId}/read:
+    patch:
+      tags: ["IS / Notifications"]
+      summary: "Отметить уведомление как прочитанное"
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: "Отмечено"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/admin/users:
+    get:
+      tags: ["IS / Admin"]
+      summary: "Список пользователей (Admin)"
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      type: object
+                  meta:
+                    $ref: "#/components/schemas/PageMeta"
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/admin/users/{userId}/status:
+    patch:
+      tags: ["IS / Admin"]
+      summary: "Изменить статус пользователя (Admin)"
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [Active, Blocked]
+      responses:
+        "200":
+          description: "Статус обновлён"
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/admin/scenarios/templates:
+    post:
+      tags: ["IS / Admin"]
+      summary: "Добавить сценарий в каталог (Admin)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenarioTypeCode, name, description]
+              properties:
+                scenarioTypeCode:
+                  type: string
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScenarioTemplateResponse"
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"

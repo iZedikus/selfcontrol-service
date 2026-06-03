@@ -24,14 +24,21 @@ public class SecurityConfig {
     }
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http, BearerTokenFilter filter) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                            BearerTokenFilter filter,
+                                            JsonAuthenticationEntryPoint authenticationEntryPoint,
+                                            JsonAccessDeniedHandler accessDeniedHandler) throws Exception {
         return http.csrf(c -> c.disable())
                 .cors(Customizer.withDefaults())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .exceptionHandling(e -> e
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
                 .authorizeHttpRequests(a -> a
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/scenarios/templates").permitAll()
-                        .requestMatchers("/api/v1/auth/**", "/actuator/health", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                        .requestMatchers("/api/v1/auth/**", "/actuator/health",
+                                "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/openapi-is.yaml").permitAll()
                         .requestMatchers("/api/v1/admin", "/api/v1/admin/**").hasAuthority(UserRole.Admin.authority())
                         .anyRequest().authenticated())
                 .addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class)
