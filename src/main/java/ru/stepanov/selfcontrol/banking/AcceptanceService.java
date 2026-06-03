@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.common.Money;
+import ru.stepanov.selfcontrol.notification.NotificationService;
 import ru.stepanov.selfcontrol.rabbit.ProfileSyncAction;
 import ru.stepanov.selfcontrol.rabbit.ProfileSyncPublisher;
 import ru.stepanov.selfcontrol.scenario.ScenarioProfileSyncSupport;
@@ -34,6 +35,7 @@ public class AcceptanceService {
     private final SimulacrumClient simulacrum;
     private final ProfileSyncPublisher profileSyncPublisher;
     private final UndesirablePurchasePlugin undesirablePurchasePlugin;
+    private final NotificationService notifications;
     private final AuditService audit;
 
     public AcceptanceService(ConsentRepository consents,
@@ -43,6 +45,7 @@ public class AcceptanceService {
                              SimulacrumClient simulacrum,
                              ProfileSyncPublisher profileSyncPublisher,
                              UndesirablePurchasePlugin undesirablePurchasePlugin,
+                             NotificationService notifications,
                              AuditService audit) {
         this.consents = consents;
         this.accounts = accounts;
@@ -51,6 +54,7 @@ public class AcceptanceService {
         this.simulacrum = simulacrum;
         this.profileSyncPublisher = profileSyncPublisher;
         this.undesirablePurchasePlugin = undesirablePurchasePlugin;
+        this.notifications = notifications;
         this.audit = audit;
     }
 
@@ -144,6 +148,7 @@ public class AcceptanceService {
         Consent saved = consents.save(consent);
 
         publishTerminateForActiveScenarios(consent.getLinkedAccountId());
+        notifications.notifyConsentRevoked(userId, saved.getConsentId(), saved.getLinkedAccountId());
 
         audit.record(userId, userId, "CONSENT_REVOKED", "CONSENT", saved.getConsentId(), Map.of(
                 "linkedAccountId", saved.getLinkedAccountId(),

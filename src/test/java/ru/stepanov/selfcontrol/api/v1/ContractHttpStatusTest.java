@@ -13,11 +13,14 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import ru.stepanov.selfcontrol.banking.*;
 import ru.stepanov.selfcontrol.common.GlobalExceptionHandler;
 import ru.stepanov.selfcontrol.config.JacksonConfig;
+import ru.stepanov.selfcontrol.api.contract.PagedResponse;
+import ru.stepanov.selfcontrol.api.contract.PageMeta;
 import ru.stepanov.selfcontrol.api.contract.auth.AuthResponse;
 import ru.stepanov.selfcontrol.identity.AuthController;
 import ru.stepanov.selfcontrol.identity.AuthService;
-import ru.stepanov.selfcontrol.security.TokenService;
+import ru.stepanov.selfcontrol.notification.NotificationService;
 import ru.stepanov.selfcontrol.security.AuthenticationFacade;
+import ru.stepanov.selfcontrol.security.TokenService;
 
 import java.util.List;
 import java.util.UUID;
@@ -27,6 +30,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -50,10 +55,15 @@ class ContractHttpStatusTest {
     private AccountsController accountsController;
     @InjectMocks
     private ConsentsController consentsController;
+    @Mock
+    private NotificationService notificationService;
+    @InjectMocks
+    private NotificationsController notificationsController;
 
     private MockMvc authMvc;
     private MockMvc accountsMvc;
     private MockMvc consentsMvc;
+    private MockMvc notificationsMvc;
 
     @BeforeEach
     void setUp() {
@@ -68,6 +78,10 @@ class ContractHttpStatusTest {
                 .setMessageConverters(converter)
                 .build();
         consentsMvc = MockMvcBuilders.standaloneSetup(consentsController)
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .setMessageConverters(converter)
+                .build();
+        notificationsMvc = MockMvcBuilders.standaloneSetup(notificationsController)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setMessageConverters(converter)
                 .build();
@@ -153,5 +167,28 @@ class ContractHttpStatusTest {
                 .andExpect(status().isNoContent());
 
         verify(acceptanceService).revokeByLinkedAccountId(userId, linkedAccountId);
+    }
+
+    @Test
+    void markNotificationReadReturns204() throws Exception {
+        UUID userId = UUID.randomUUID();
+        UUID notificationId = UUID.randomUUID();
+        when(auth.userId()).thenReturn(userId);
+
+        notificationsMvc.perform(patch("/api/v1/notifications/{id}/read", notificationId))
+                .andExpect(status().isNoContent());
+
+        verify(notificationService).markRead(userId, notificationId);
+    }
+
+    @Test
+    void listNotificationsReturns200() throws Exception {
+        UUID userId = UUID.randomUUID();
+        when(auth.userId()).thenReturn(userId);
+        when(notificationService.list(userId, false, 0, 20))
+                .thenReturn(new PagedResponse<>(List.of(), new PageMeta(0, 20, 0, 0)));
+
+        notificationsMvc.perform(get("/api/v1/notifications"))
+                .andExpect(status().isOk());
     }
 }

@@ -9,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.common.CurrencyCode;
 import ru.stepanov.selfcontrol.common.Money;
+import ru.stepanov.selfcontrol.notification.NotificationService;
 import ru.stepanov.selfcontrol.rabbit.ProfileSyncAction;
 import ru.stepanov.selfcontrol.rabbit.ProfileSyncMessage;
 import ru.stepanov.selfcontrol.rabbit.ProfileSyncPublisher;
@@ -48,6 +49,8 @@ class AcceptanceServiceRevokeTest {
     @Mock
     private UndesirablePurchasePlugin undesirablePurchasePlugin;
     @Mock
+    private NotificationService notifications;
+    @Mock
     private AuditService audit;
 
     private AcceptanceService service;
@@ -56,7 +59,7 @@ class AcceptanceServiceRevokeTest {
     void setUp() {
         service = new AcceptanceService(
                 consents, accounts, userScenarios, scenarioConfigs,
-                simulacrum, profileSyncPublisher, undesirablePurchasePlugin, audit);
+                simulacrum, profileSyncPublisher, undesirablePurchasePlugin, notifications, audit);
     }
 
     @Test
@@ -106,5 +109,6 @@ class AcceptanceServiceRevokeTest {
         verify(profileSyncPublisher).publish(captor.capture());
         assertEquals(ProfileSyncAction.TERMINATE, captor.getValue().action());
         assertEquals(scenarioId, captor.getValue().externalUserScenarioId());
+        verify(notifications).notifyConsentRevoked(userId, consent.getConsentId(), linkedAccountId);
     }
 }

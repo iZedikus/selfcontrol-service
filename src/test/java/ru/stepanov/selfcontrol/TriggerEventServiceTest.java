@@ -20,6 +20,7 @@ import ru.stepanov.selfcontrol.scenario.ScenarioExecutionRepository;
 import ru.stepanov.selfcontrol.scenario.TriggerEventService;
 import ru.stepanov.selfcontrol.scenario.UserScenario;
 import ru.stepanov.selfcontrol.scenario.UserScenarioRepository;
+import ru.stepanov.selfcontrol.notification.NotificationService;
 import ru.stepanov.selfcontrol.simulacrum.*;
 
 import java.time.Instant;
@@ -45,12 +46,14 @@ class TriggerEventServiceTest {
     private SimulacrumClient simulacrum;
     @Mock
     private DebitStatusPoller debitStatusPoller;
+    @Mock
+    private NotificationService notifications;
 
     private TriggerEventService service;
 
     @BeforeEach
     void setUp() {
-        service = new TriggerEventService(executions, scenarios, linkedAccounts, consents, simulacrum, debitStatusPoller);
+        service = new TriggerEventService(executions, scenarios, linkedAccounts, consents, simulacrum, debitStatusPoller, notifications);
     }
 
     @Test
@@ -92,6 +95,8 @@ class TriggerEventServiceTest {
         assertNull(operation.getFailure());
         assertNotNull(operation.getCompletedAt());
         verify(executions).save(execution);
+        verify(notifications).notifyScenarioTriggered(execution);
+        verify(notifications).notifyDebitOutcome(execution);
     }
 
     @Test

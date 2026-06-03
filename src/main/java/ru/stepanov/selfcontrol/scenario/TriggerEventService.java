@@ -9,6 +9,7 @@ import ru.stepanov.selfcontrol.banking.ConsentRepository;
 import ru.stepanov.selfcontrol.banking.LinkedAccount;
 import ru.stepanov.selfcontrol.banking.LinkedAccountRepository;
 import ru.stepanov.selfcontrol.common.*;
+import ru.stepanov.selfcontrol.notification.NotificationService;
 import ru.stepanov.selfcontrol.rabbit.TriggerEventMessage;
 import ru.stepanov.selfcontrol.simulacrum.*;
 
@@ -24,19 +25,22 @@ public class TriggerEventService {
     private final ConsentRepository consents;
     private final SimulacrumClient simulacrum;
     private final DebitStatusPoller debitStatusPoller;
+    private final NotificationService notifications;
 
     public TriggerEventService(ScenarioExecutionRepository executions,
                                UserScenarioRepository scenarios,
                                LinkedAccountRepository linkedAccounts,
                                ConsentRepository consents,
                                SimulacrumClient simulacrum,
-                               DebitStatusPoller debitStatusPoller) {
+                               DebitStatusPoller debitStatusPoller,
+                               NotificationService notifications) {
         this.executions = executions;
         this.scenarios = scenarios;
         this.linkedAccounts = linkedAccounts;
         this.consents = consents;
         this.simulacrum = simulacrum;
         this.debitStatusPoller = debitStatusPoller;
+        this.notifications = notifications;
     }
 
     @Transactional
@@ -89,7 +93,10 @@ public class TriggerEventService {
         } catch (Exception ex) {
             markDebitFailed(e, op, new Failure(ex.getClass().getSimpleName(), ex.getMessage()));
         }
-        return executions.save(e);
+        ScenarioExecution saved = executions.save(e);
+        notifications.notifyScenarioTriggered(saved);
+        notifications.notifyDebitOutcome(saved);
+        return saved;
     }
 
     private PaymentDebitRequest buildDebitRequest(TriggerEventMessage m) {
