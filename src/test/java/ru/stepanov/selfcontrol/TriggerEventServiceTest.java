@@ -21,6 +21,8 @@ import ru.stepanov.selfcontrol.scenario.TriggerEventService;
 import ru.stepanov.selfcontrol.scenario.UserScenario;
 import ru.stepanov.selfcontrol.scenario.UserScenarioRepository;
 import ru.stepanov.selfcontrol.notification.NotificationService;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.RestClientResponseException;
 import ru.stepanov.selfcontrol.simulacrum.*;
 
 import java.time.Instant;
@@ -164,6 +166,29 @@ class TriggerEventServiceTest {
         DebitOperation operation = onlyOperation(execution);
         assertNull(operation.getExternalTransactionID());
         assertEquals("IllegalStateException", operation.getFailure().getCode());
+        verify(debitStatusPoller, never()).pollUntilFinal(any(), any());
+    }
+
+    @Test
+    void simulacrumConflictOnSubmitMarksExecutionFailed() {
+        TriggerEventMessage message = message();
+        when(executions.existsByTriggerEventId(message.triggerEventId())).thenReturn(false);
+        when(scenarios.findById(message.externalUserScenarioId())).thenReturn(Optional.of(new UserScenario()));
+        when(linkedAccounts.findById(message.debitConfig().sourceAccountId()))
+                .thenReturn(Optional.of(linkedAccount(message.debitConfig().sourceAccountId(), "ACC-SRC")));
+        when(consents.findByLinkedAccountId(message.debitConfig().sourceAccountId()))
+                .thenReturn(Optional.of(consent(message.debitConfig().sourceAccountId(), message.debitConfig().consentId(), "consent-ext-1")));
+        when(simulacrum.submitDebit(eq(message.externalUserId()), any()))
+                .thenThrow(new RestClientResponseException("409 Conflict", HttpStatus.CONFLICT.value(), "409 Conflict",
+                        null, """
+                                {"status":409,"error":"CONSENT_INACTIVE","message":"Consent is not active"}
+                                """.getBytes(), null));
+        when(executions.save(any(ScenarioExecution.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ScenarioExecution execution = service.handle(message);
+
+        assertEquals(ExecutionStatus.Failed, execution.getStatus());
+        assertEquals("RestClientResponseException", onlyOperation(execution).getFailure().getCode());
         verify(debitStatusPoller, never()).pollUntilFinal(any(), any());
     }
 

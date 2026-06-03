@@ -6,9 +6,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 import ru.stepanov.selfcontrol.config.IsProperties;
 import ru.stepanov.selfcontrol.config.JacksonConfig;
 
@@ -17,6 +19,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.*;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
 
@@ -153,5 +156,101 @@ class SimulacrumClientTest {
         assertEquals(DebitStatuses.COMPLETED, response.status());
         assertNull(response.failureCode());
         assertNull(response.failureMessage());
+    }
+
+    @Test
+    void grantConsentPropagatesNotFoundFromSimulacrum() {
+        server.expect(requestTo("http://simulacrum:8081/api/v1/consents"))
+                .andExpect(method(org.springframework.http.HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {"status":404,"error":"NOT_FOUND","message":"Account not found","timestamp":"2026-05-25T10:00:00.000Z"}
+                                """));
+
+        RestClientResponseException ex = assertThrows(RestClientResponseException.class, () -> client.grantConsent(userId,
+                new RegisterConsentRequest("MISSING", "10000.00", null, "RUB", "BEXP", null, null)));
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getStatusCode().value());
+    }
+
+    @Test
+    void grantConsentPropagatesConflictFromSimulacrum() {
+        server.expect(requestTo("http://simulacrum:8081/api/v1/consents"))
+                .andExpect(method(org.springframework.http.HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.CONFLICT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {"status":409,"error":"CONFLICT","message":"Consent already exists","timestamp":"2026-05-25T10:00:00.000Z"}
+                                """));
+
+        RestClientResponseException ex = assertThrows(RestClientResponseException.class, () -> client.grantConsent(userId,
+                new RegisterConsentRequest("ACC-001", "10000.00", null, "RUB", "BEXP", null, null)));
+
+        assertEquals(HttpStatus.CONFLICT.value(), ex.getStatusCode().value());
+    }
+
+    @Test
+    void submitDebitPropagatesNotFoundFromSimulacrum() {
+        server.expect(requestTo("http://simulacrum:8081/api/v1/payments/debit"))
+                .andExpect(method(org.springframework.http.HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {"status":404,"error":"NOT_FOUND","message":"consentId not found","timestamp":"2026-05-25T10:00:00.000Z"}
+                                """));
+
+        RestClientResponseException ex = assertThrows(RestClientResponseException.class, () -> client.submitDebit(userId,
+                new PaymentDebitRequest("missing-consent", "ACC-001", "token", "200.00", "RUB")));
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getStatusCode().value());
+    }
+
+    @Test
+    void submitDebitPropagatesConflictFromSimulacrum() {
+        server.expect(requestTo("http://simulacrum:8081/api/v1/payments/debit"))
+                .andExpect(method(org.springframework.http.HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.CONFLICT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {"status":409,"error":"CONSENT_INACTIVE","message":"Consent is not active","timestamp":"2026-05-25T10:00:00.000Z"}
+                                """));
+
+        RestClientResponseException ex = assertThrows(RestClientResponseException.class, () -> client.submitDebit(userId,
+                new PaymentDebitRequest("a1b2c3d4-e5f6-7890-abcd-ef1234567890", "ACC-001", "token", "200.00", "RUB")));
+
+        assertEquals(HttpStatus.CONFLICT.value(), ex.getStatusCode().value());
+    }
+
+    @Test
+    void getDebitStatusPropagatesNotFoundFromSimulacrum() {
+        server.expect(requestTo("http://simulacrum:8081/api/v1/payments/UNKNOWN/status"))
+                .andExpect(method(org.springframework.http.HttpMethod.GET))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {"status":404,"error":"NOT_FOUND","message":"Transaction not found","timestamp":"2026-05-25T10:00:00.000Z"}
+                                """));
+
+        RestClientResponseException ex = assertThrows(RestClientResponseException.class,
+                () -> client.getDebitStatus(userId, "UNKNOWN"));
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getStatusCode().value());
+    }
+
+    @Test
+    void revokeConsentPropagatesNotFoundFromSimulacrum() {
+        server.expect(requestTo("http://simulacrum:8081/api/v1/consents/missing-consent"))
+                .andExpect(method(org.springframework.http.HttpMethod.DELETE))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {"status":404,"error":"NOT_FOUND","message":"Consent not found","timestamp":"2026-05-25T10:00:00.000Z"}
+                                """));
+
+        RestClientResponseException ex = assertThrows(RestClientResponseException.class,
+                () -> client.revokeConsent(userId, "missing-consent"));
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getStatusCode().value());
     }
 }
