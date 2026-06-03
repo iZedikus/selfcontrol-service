@@ -1,0 +1,343 @@
+phases:
+  - phase: 0
+    name: "Конфигурация и контрактные константы"
+    tasks:
+      - id: "0.1"
+        title: "Порт и идентификатор IS"
+        description: |
+          - Установить server.port=8080 (или профиль docker с 8080)
+          - Добавить свойство app.is.creditor-system-id (UUID/строка для creditorSystemId в Simulacrum)
+          - Задокументировать в application.properties
+        criteria: |
+          - Приложение стартует на 8080
+          - Свойство используется в коде (пока заглушкой в следующих задачах)
+        artifacts:
+          - application.properties
+          - application-docker.yml (опционально)
+      - id: "0.2"
+        title: "Пакет контрактных DTO"
+        description: |
+          - Создать ru.stepanov.selfcontrol.api.contract (или api.v1.dto)
+          - Реализовать record/классы по контракту:
+            - ErrorResponse, PageMeta, PagedResponse<T>
+            - AuthResponse, register/login/refresh request
+            - LinkedAccountResponse, link account request
+            - ConsentResponse, grant consent request
+            - ScenarioTemplateResponse, UserScenarioResponse, activate/update request
+            - ExecutionResponse, DebitOperationResponse, TriggerSnapshotResponse
+            - NotificationResponse
+          - Enums в PascalCase как в YAML
+        criteria: |
+          - Поля и имена JSON совпадают с контрактом (linkedAccountId, templateId, isPublished и т.д.)
+        artifacts:
+          - ru/stepanov/selfcontrol/api/contract/*.java
+  - phase: 1
+    name: "Сквозные соглашения API"
+    tasks:
+      - id: "1.1"
+        title: "Единый ErrorResponse и обработка исключений"
+        description: |
+          - Расширить GlobalExceptionHandler:
+            - ResponseStatusException → нужный HTTP + ErrorResponse (NOT_FOUND, CONFLICT, VALIDATION_ERROR, FORBIDDEN, INTERNAL_ERROR)
+            - IllegalArgumentException → 400 / VALIDATION_ERROR
+          - timestamp в UTC ISO-8601 с миллисекундами (Instant.now())
+        criteria: |
+          - Любой 4xx/5xx из контроллера возвращает {status, error, message, timestamp}
+        artifacts:
+          - GlobalExceptionHandler.java
+          - ErrorResponse.java
+          - ApiException.java (опционально)
+      - id: "1.2"
+        title: "Сериализация денег и дат"
+        description: |
+          - Jackson: Money → в API только строка "350.00" + отдельно currency где нужно по схеме
+          - Instant → UTC 2026-05-25T10:00:00.000Z (настроить ObjectMapper / @JsonFormat)
+        criteria: |
+          - Sample JSON из контракта сериализуется без BigDecimal в теле ответа
+        artifacts:
+          - JacksonConfig.java
+          - MoneySerializer.java (опционально)
+      - id: "1.3"
+        title: "Обёртка пагинации content + meta"
+        description: |
+          - Создать утилиту/record PagedResponse + хелпер из Page<T> Spring Data (page, size, totalElements, totalPages)
+        criteria: |
+          - Готово к использованию в executions, notifications, admin users
+        artifacts:
+          - PagedResponse.java
+          - PageMeta.java
+          - PageUtils.java
+      - id: "1.4"
+        title: "HTTP-коды ответов"
+        description: |
+          - Для контрактных эндпоинтов выставить @ResponseStatus: 201 (create), 204 (delete/revoke/read notification), 202 где указано для debit
+        criteria: |
+          - Smoke по Auth/Accounts/Consents возвращает ожидаемые коды
+        artifacts: []
+  - phase: 2
+    name: "Исходящая интеграция с Simulacrum (критично)"
+    tasks:
+      - id: "2.1"
+        title: "Переписать SimulacrumClient: consents"
+        description: |
+          - Изменить пути и DTO:
+            - POST /api/v1/consents с телом {accountId, totalDebitLimit, maxSingleDebit, currency, purposeCode, creditorSystemId, expiresAt}
+            - DELETE /api/v1/consents/{consentId} (revoke)
+            - GET /api/v1/users/{userId}/accounts - оставить только для внутренней отладки (не публичное API)
+          - Маппинг: accountId ← LinkedAccount.externalAccountId или paymentToken; creditorSystemId ← app.is.creditor-system-id
+        criteria: |
+          - Лог simulacrum_api_log пишет новые пути
+          - grant/revoke парсят consentId UUID из ответа
+        artifacts:
+          - SimulacrumClient.java
+          - AcceptanceService.java
+          - BankingAccountLifecycleService.java (если меняется)
+      - id: "2.2"
+        title: "SimulacrumClient: payments debit + status"
+        description: |
+          - Добавить POST /api/v1/payments/debit с телом {consentId, sourceAccountId, recipientPaymentToken, amount, currency}
+          - Добавить GET /api/v1/payments/{transactionId}/status
+          - DTO ответов: submit → transactionId, status=Pending; status → failureCode, failureMessage
+          - Добавить RestClient поддержку DELETE (сейчас switch только GET/POST)
+        criteria: |
+          - Unit/integration-тест с MockRestServiceServer на оба вызова
+        artifacts:
+          - SimulacrumClient.java
+          - PaymentDebitRequest.java
+          - PaymentStatusResponse.java
+      - id: "2.3"
+        title: "Сервис polling статуса debit"
+        description: |
+          - Создать DebitStatusPoller (или метод в клиенте):
+            - После submit – до 5 попыток с паузой 1 с
+            - Финальные статусы AcceptedSettlementCompleted / Rejected
+            - Промежуточные Pending / AcceptedSettlementInProcess – retry
+        criteria: |
+          - При Rejected возвращаются failureCode/failureMessage
+          - При таймауте – явная ошибка для execution
+        artifacts:
+          - DebitStatusPoller.java
+  - phase: 3
+    name: "Бизнес-поток trigger → debit (RabbitMQ + REST)"
+    tasks:
+      - id: "3.1"
+        title: "Обновить TriggerEventService"
+        description: |
+          - initiateDebit с контрактным телом (consentId = external consent UUID, sourceAccountId = account id в Simulacrum)
+          - После 202 – вызов polling из 2.3
+          - Маппинг статусов в execution: Completed / Failed (контракт IS), debit operation – банковские enum из Simulacrum
+          - Сохранить externalTransactionId, failureCode, failureMessage
+        criteria: |
+          - TriggerEventServiceTest обновлён: mock submit + poll completed/rejected/pending
+        artifacts:
+          - TriggerEventService.java
+          - ExecutionStatus.java (или mapper)
+          - DebitOperation.java
+      - id: "3.2"
+        title: "ProfileSync при отзыве ПДА"
+        description: |
+          - В AcceptanceService.revoke (или новом consent flow): для всех активных UserScenario по связанным linkedAccountId отправить ProfileSyncMessage с PAUSE или TERMINATE (правило: TERMINATE при revoke)
+        criteria: |
+          - Тест/проверка: revoke → N сообщений в mock RabbitTemplate или audit
+        artifacts:
+          - AcceptanceService.java
+          - ProfileSyncMessage.java
+      - id: "3.3"
+        title: "Привязка consent к счёту (модель данных)"
+        description: |
+          - Контракт: consent на счёт (POST /accounts/{linkedAccountId}/consent)
+          - Один Consent (или переименовать Acceptance) на linkedAccountId
+          - Миграция Flyway V7__...
+          - Рефакторинг AcceptanceService под один счёт
+        criteria: |
+          - grant/revoke по linkedAccountId
+          - externalConsentId на записи consent
+        artifacts:
+          - V7__refactor_consent_to_account.sql
+          - Consent.java (entity)
+          - AcceptanceService.java
+  - phase: 4
+    name: "Входящий REST API (контрактные контроллеры)"
+    tasks:
+      - id: "4.1"
+        title: "Auth API"
+        description: |
+          - Эндпоинты: POST /api/v1/auth/register, /login, /refresh
+          - Register: firstName, lastName в RegisterRequest + сохранение в User
+          - AuthResponse: accessToken, refreshToken, expiresIn (1800 из TokenService), userId
+          - Убрать role/status из публичного ответа
+          - logout – не в контракте: перенести в /api/v1/profile или удалить
+        criteria: |
+          - Postman-коллекция по контракту проходит Auth
+        artifacts:
+          - AuthController.java
+          - RegisterRequest.java, LoginRequest.java, RefreshRequest.java
+      - id: "4.2"
+        title: "Accounts API"
+        description: |
+          - Эндпоинты: POST/GET/DELETE /api/v1/accounts
+          - POST: принять paymentToken, bankBic, currency, displayName, maskedPan (валидация)
+          - GET: LinkedAccountResponse без paymentToken (@JsonIgnore или отдельный mapper)
+          - DELETE: 204, проверка активных сценариев → 409 CONFLICT
+        criteria: |
+          - JSON ответа совпадает с is_LinkedAccountResponse
+          - Токен не в ответе
+        artifacts:
+          - AccountsController.java
+          - LinkedAccountRequest.java
+      - id: "4.3"
+        title: "Consents API"
+        description: |
+          - Эндпоинты: POST/DELETE /api/v1/accounts/{linkedAccountId}/consent
+          - Тело grant: totalDebitLimit, maxSingleDebit, currency, expiresAt (строки-деньги)
+          - Ответ is_ConsentResponse
+          - DELETE → 204
+        criteria: |
+          - Интеграция с Simulacrum из 2.1
+          - 404 если счёт не найден
+        artifacts:
+          - ConsentController.java
+          - GrantConsentRequest.java
+      - id: "4.4"
+        title: "Scenarios API"
+        description: |
+          - Эндпоинты: GET /api/v1/scenarios/templates
+          - POST/GET/PUT/DELETE /api/v1/scenarios (+ {userScenarioId})
+          - DTO: templateId, scenarioTypeCode, isPublished, scenarioConfig как Map/JSON
+          - Activate: плоское тело (templateId, linkedAccountId, debitAmount, currency, recipientPaymentToken, scenarioConfig)
+          - DELETE → 204 + ProfileSync TERMINATE
+          - Убрать/перенести POST .../deactivate и GET /scenario-templates
+        criteria: |
+          - Activate публикует ProfileSync REGISTER
+          - Update — UPDATE_RULES
+        artifacts:
+          - ScenariosController.java
+          - ActivateScenarioRequest.java, UpdateScenarioRequest.java
+      - id: "4.5"
+        title: "Executions API"
+        description: |
+          - GET /api/v1/scenarios/{userScenarioId}/executions?page&size
+          - GET /api/v1/executions/{executionId}
+          - ExecutionMapper entity → ExecutionResponse (статусы Pending, DebitInitiated, Completed, Failed)
+          - Пагинация PagedResponse
+          - Авторизация: execution только своего userId
+        criteria: |
+          - Структура triggerSnapshot + debitOperation как в контракте
+        artifacts:
+          - ExecutionsController.java
+          - ExecutionMapper.java
+      - id: "4.6"
+        title: "Admin API"
+        description: |
+          - GET /api/v1/admin/users (пагинация)
+          - PATCH /api/v1/admin/users/{userId}/status (Active | Blocked)
+          - POST /api/v1/admin/scenarios/templates
+          - Заменить block/unblock на PATCH
+          - Остальные admin-эндпоинты – под /api/v1/admin/internal/... или feature-flag
+        criteria: |
+          - @PreAuthorize Admin
+          - 403 в формате ErrorResponse
+        artifacts:
+          - AdminController.java
+          - UserStatusUpdateRequest.java
+  - phase: 5
+    name: "Уведомления (новый модуль)"
+    tasks:
+      - id: "5.1"
+        title: "Модель и миграция notifications"
+        description: |
+          - Flyway V7/V8: таблица notifications (notification_id, user_id, type, payload JSONB, is_read, created_at)
+        criteria: |
+          - JPA entity + repository
+        artifacts:
+          - V8__create_notifications_table.sql
+          - Notification.java
+          - NotificationRepository.java
+      - id: "5.2"
+        title: "Публикация уведомлений"
+        description: |
+          - NotificationService.create(...) вызывать из:
+            - TriggerEventService (ScenarioTriggered, DebitCompleted, DebitFailed)
+            - consent revoke/expiring (ConsentRevoked – позже)
+          - Enum типов как в контракте
+        criteria: |
+          - После успешного/неуспешного debit в БД есть notification
+        artifacts:
+          - NotificationService.java
+      - id: "5.3"
+        title: "REST notifications"
+        description: |
+          - GET /api/v1/notifications, PATCH .../{id}/read
+          - Контроллер + пагинация + unreadOnly
+          - PATCH → 204
+        criteria: |
+          - Соответствие контракту
+        artifacts:
+          - NotificationsController.java
+  - phase: 6
+    name: "Безопасность, OpenAPI, очистка"
+    tasks:
+      - id: "6.1"
+        title: "SecurityConfig под новые пути"
+        description: |
+          - permitAll: /api/v1/auth/**, /api/v1/scenarios/templates (GET)
+          - authenticated: accounts, consents, scenarios (кроме templates), executions, notifications
+          - admin: /api/v1/admin/**
+          - Убрать permit для старых путей после удаления
+        criteria: |
+          - Без токена 401 с UNAUTHORIZED в формате контракта
+        artifacts:
+          - SecurityConfig.java
+      - id: "6.2"
+        title: "OpenAPI / Swagger из контракта"
+        description: |
+          - Импортировать REST_КОНТРАКТ.yaml в springdoc (springdoc.swagger-ui.url) или сгенерировать минимальный openapi только для IS-секций
+          - Убедиться, что UI на /swagger-ui.html
+        criteria: |
+          - В Swagger видны только IS-эндпоинты (или полный контракт с пометкой сервера IS)
+        artifacts:
+          - application.properties (springdoc настройки)
+          - openapi.yaml (опционально)
+      - id: "6.3"
+        title: "Удаление/изоляция legacy API"
+        description: |
+          - Удалить или пометить @Deprecated(forRemoval=true):
+            - BankingController (/api/v1/banking/*)
+            - старые пути в ScenarioController
+            - POST /debit-operations/{id}/dispute (нет в контракте – в internal или удалить)
+          - Профиль (/api/v1/profile) – вне контракта, оставить как доп. API, не смешивать с контрактными путями
+        criteria: |
+          - grep по проекту не находит дублирующих публичных путей
+          - Тесты обновлены
+        artifacts: []
+  - phase: 7
+    name: "Тесты и приёмка интеграции"
+    tasks:
+      - id: "7.1"
+        title: "Contract-тесты контроллеров (MockMvc)"
+        description: |
+          - По одному тест-классу на группу: Auth, Accounts, Consents, Scenarios, Executions, Notifications, Admin
+          - Проверка path, status, JSON-полей, ErrorResponse
+        criteria: |
+          - ./mvnw test green
+        artifacts:
+          - *ControllerTest.java классы в src/test/java
+      - id: "7.2"
+        title: "Тесты SimulacrumClient + TriggerEventService"
+        description: |
+          - MockRestServiceServer для debit + status polling
+          - Сценарии CONFLICT/404 от Simulacrum
+        artifacts:
+          - SimulacrumClientTest.java
+          - TriggerEventServiceTest.java
+      - id: "7.3"
+        title: "Чеклист интеграции (документ в репо)"
+        description: |
+          - Создать docs/INTEGRATION_CHECKLIST.md
+          - Матрица эндпоинтов, примеры curl
+          - Переменные SIMULACRUM_BASE_URL, порт 8080
+          - Сценарий «register → link account → grant consent → activate scenario → (mock trigger) → debit»
+        criteria: |
+          - Агент/человек может пройти E2E по документу
+        artifacts:
+          - docs/INTEGRATION_CHECKLIST.md

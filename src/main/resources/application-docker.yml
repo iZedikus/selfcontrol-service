@@ -1,0 +1,7 @@
+# Профиль для контейнера IS (docker-compose / k8s)
+server:
+  port: 8080
+
+app:
+  is:
+    creditor-system-id: ${IS_CREDITOR_SYSTEM_ID:00000000-0000-0000-0000-000000000001}

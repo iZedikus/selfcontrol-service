@@ -1,0 +1,1581 @@
+openapi: "3.1.0"
+
+info:
+  title: "Спецификация REST API — Система безакцептных списаний"
+  version: "1.0.0"
+  description: |
+    ## Назначение документа
+
+    Единственный источник истины (Single Source of Truth) для REST-взаимодействия
+    между тремя сервисами системы. Каждый агент, реализующий отдельный сервис,
+    должен строго следовать этой спецификации.
+
+    ## Сервисы
+
+    | Идентификатор | Назначение                          | Базовый URL               |
+    |---------------|-------------------------------------|---------------------------|
+    | SIMULACRUM    | Имитатор Open API Банка России      | http://simulacrum:8081    |
+    | ORACLE        | Мониторинг транзакций               | http://oracle:8082        |
+    | IS            | Основная информационная система     | http://is:8080            |
+
+    ## Кто кого вызывает по REST
+
+    ```
+    IS  ──POST /api/v1/payments/debit──────────────────►  SIMULACRUM
+    IS  ──GET  /api/v1/payments/{id}/status────────────►  SIMULACRUM
+    IS  ──GET  /actuator/health────────────────────────►  ORACLE (только healthcheck)
+    Пользователь/Postman  ──────────────────────────────►  IS  (все пользовательские операции)
+    Администратор/Postman ──────────────────────────────►  SIMULACRUM  (тестовые данные)
+    ```
+
+    ORACLE **не имеет** публичного REST API (кроме /actuator/health).
+    Вся интеграция ORACLE с другими сервисами — через RabbitMQ.
+
+    ## Глобальные соглашения
+
+    - Формат данных: `application/json`, кодировка UTF-8
+    - Формат дат: ISO-8601, всегда UTC: `2026-05-25T10:00:00.000Z`
+    - UUID: строка `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+    - Деньги: строка с двумя знаками после запятой: `"350.00"` (не float, не int)
+    - Валюта: ISO 4217, три заглавных символа: `"RUB"`, `"USD"`, `"EUR"`
+    - Пагинация: параметры `page` (0-based) и `size` (default 20, max 100)
+    - Все строковые enum — PascalCase, если не указано иное
+    - Ошибки: единый формат `ErrorResponse` (см. Раздел: Общие схемы)
+
+servers:
+  - url: "http://simulacrum:8081"
+    description: "SIMULACRUM — имитатор Open API Банка России"
+  - url: "http://oracle:8082"
+    description: "ORACLE — сервис мониторинга транзакций"
+  - url: "http://is:8080"
+    description: "IS — основная информационная система"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ОБЩИЕ СХЕМЫ (используются в нескольких сервисах)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+components:
+  schemas:
+
+    # ── Универсальный ответ об ошибке ────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      required: [status, error, message, timestamp]
+      properties:
+        status:
+          type: integer
+          example: 404
+        error:
+          type: string
+          example: "NOT_FOUND"
+          description: "Машиночитаемый код ошибки (SCREAMING_SNAKE_CASE)"
+        message:
+          type: string
+          example: "Account not found: ACC-001"
+          description: "Человекочитаемое описание"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-05-25T10:00:00.000Z"
+      description: |
+        Используется всеми сервисами для ответов с кодами 4xx и 5xx.
+        Коды ошибок (поле error):
+          NOT_FOUND          — сущность не найдена (404)
+          CONFLICT           — нарушение бизнес-инварианта (409)
+          VALIDATION_ERROR   — ошибка валидации входного DTO (400)
+          UNAUTHORIZED       — не аутентифицирован (401)
+          FORBIDDEN          — нет прав (403)
+          INTERNAL_ERROR     — внутренняя ошибка (500)
+
+    # ── Пагинированный ответ (обёртка) ──────────────────────────────────────
+    PageMeta:
+      type: object
+      required: [page, size, totalElements, totalPages]
+      properties:
+        page:
+          type: integer
+          description: "Текущая страница (0-based)"
+        size:
+          type: integer
+          description: "Размер страницы"
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# СЕРВИС: SIMULACRUM
+# Базовый URL: http://simulacrum:8081
+# Безопасность: отсутствует (только внутренняя сеть)
+# Swagger UI: http://simulacrum:8081/swagger-ui.html
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [SIMULACRUM] Группа: Accounts — управление тестовыми счетами
+# Используется: Администратором вручную (Postman/Swagger)
+# ─────────────────────────────────────────────────────────────────────────────
+
+  simulacrum_CreateAccount:
+    POST /api/v1/accounts:
+      summary: "Создать тестовый счёт"
+      tags: [SIMULACRUM / Accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accountId, currency, accountType]
+              properties:
+                accountId:
+                  type: string
+                  example: "ACC-TEST-001"
+                  description: "Произвольный идентификатор. Уникален в рамках симулякра."
+                currency:
+                  type: string
+                  example: "RUB"
+                accountType:
+                  type: string
+                  enum: [Personal, Business]
+                accountDescription:
+                  type: string
+                  example: "Тестовый счёт Иванова"
+      responses:
+        201:
+          description: "Счёт создан"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/simulacrum_AccountResponse'
+        400:
+          $ref: '#/components/schemas/ErrorResponse'
+        409:
+          description: "Счёт с таким accountId уже существует"
+          $ref: '#/components/schemas/ErrorResponse'
+
+  simulacrum_GetAccounts:
+    GET /api/v1/accounts:
+      summary: "Получить список счетов"
+      tags: [SIMULACRUM / Accounts]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/simulacrum_AccountResponse'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+
+  simulacrum_GetAccount:
+    GET /api/v1/accounts/{accountId}:
+      summary: "Получить счёт по ID"
+      tags: [SIMULACRUM / Accounts]
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/simulacrum_AccountResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  simulacrum_ChangeAccountStatus:
+    PATCH /api/v1/accounts/{accountId}/status:
+      summary: "Изменить статус счёта"
+      tags: [SIMULACRUM / Accounts]
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [Enabled, Disabled, Deleted]
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/simulacrum_AccountResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+        409:
+          description: "Недопустимый переход статуса"
+          $ref: '#/components/schemas/ErrorResponse'
+
+  simulacrum_AccountResponse:
+    schema:
+      type: object
+      properties:
+        accountId:
+          type: string
+        status:
+          type: string
+          enum: [Enabled, Disabled, Deleted]
+        accountType:
+          type: string
+          enum: [Personal, Business]
+        currency:
+          type: string
+        accountDescription:
+          type: string
+        statusUpdateDateTime:
+          type: string
+          format: date-time
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [SIMULACRUM] Группа: Transactions — выписки
+# ─────────────────────────────────────────────────────────────────────────────
+
+  simulacrum_GetTransactions:
+    GET /api/v1/accounts/{accountId}/transactions:
+      summary: "Получить выписку по счёту"
+      tags: [SIMULACRUM / Transactions]
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: dateFrom
+          in: query
+          schema: { type: string, format: date-time }
+          description: "Фильтр: транзакции не ранее этого момента"
+        - name: dateTo
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/simulacrum_TransactionResponse'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  simulacrum_GetTransaction:
+    GET /api/v1/accounts/{accountId}/transactions/{transactionId}:
+      summary: "Получить одну транзакцию"
+      tags: [SIMULACRUM / Transactions]
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: transactionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/simulacrum_TransactionResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  simulacrum_TransactionResponse:
+    schema:
+      type: object
+      properties:
+        transactionId:
+          type: string
+        accountId:
+          type: string
+        status:
+          type: string
+          enum: [Pending, AcceptedSettlementInProcess, AcceptedSettlementCompleted,
+                 AcceptedWithoutPosting, Rejected]
+        bankTransactionCode:
+          type: string
+        creditDebitIndicator:
+          type: string
+          enum: [Credit, Debit]
+        bookingDateTime:
+          type: string
+          format: date-time
+        valueDateTime:
+          type: string
+          format: date-time
+        amount:
+          type: string
+          example: "350.00"
+        currency:
+          type: string
+        debtor:
+          type: object
+          properties:
+            name: { type: string }
+            accountIdentification: { type: string }
+            accountSchemeName: { type: string }
+        creditor:
+          type: object
+          properties:
+            name: { type: string }
+            accountIdentification: { type: string }
+            accountSchemeName: { type: string }
+        merchant:
+          type: object
+          properties:
+            merchantName: { type: string }
+            merchantId: { type: string }
+            mccCode: { type: integer }
+        cardTransaction:
+          type: object
+          nullable: true
+          properties:
+            maskedPan: { type: string, example: "4321" }
+            cardSchemeName: { type: string, enum: [VISA, MasterCard, MIR] }
+            cardStatus: { type: string, enum: [Active, Expired, Blocked] }
+        remittanceInformation:
+          type: string
+          nullable: true
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [SIMULACRUM] Группа: Consents — предварительно данный акцепт (ПДА)
+# ─────────────────────────────────────────────────────────────────────────────
+
+  simulacrum_RegisterConsent:
+    POST /api/v1/consents:
+      summary: "Зарегистрировать предварительно данный акцепт"
+      tags: [SIMULACRUM / Consents]
+      description: |
+        Вызывается IS при выдаче пользователем акцепта на списание.
+        Симулякр создаёт запись акцепта и возвращает externalConsentId,
+        который IS сохраняет в Consent.externalConsentId.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accountId, totalDebitLimit, currency, creditorSystemId]
+              properties:
+                accountId:
+                  type: string
+                  description: "account.account_id в симулякре"
+                totalDebitLimit:
+                  type: string
+                  example: "10000.00"
+                  description: "Совокупный лимит списаний"
+                maxSingleDebit:
+                  type: string
+                  example: "500.00"
+                  description: "Лимит одного списания. null = без лимита"
+                currency:
+                  type: string
+                  example: "RUB"
+                purposeCode:
+                  type: string
+                  example: "BEXP"
+                  description: "Код назначения платежа (ISO 20022)"
+                creditorSystemId:
+                  type: string
+                  description: "Идентификатор системы-кредитора (IS). Симулякр проверяет его при списании."
+                expiresAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        201:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/simulacrum_ConsentResponse'
+        400:
+          $ref: '#/components/schemas/ErrorResponse'
+        404:
+          description: "Счёт accountId не найден"
+          $ref: '#/components/schemas/ErrorResponse'
+
+  simulacrum_GetConsent:
+    GET /api/v1/consents/{consentId}:
+      summary: "Получить акцепт по ID"
+      tags: [SIMULACRUM / Consents]
+      parameters:
+        - name: consentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/simulacrum_ConsentResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  simulacrum_RevokeConsent:
+    DELETE /api/v1/consents/{consentId}:
+      summary: "Отозвать акцепт"
+      tags: [SIMULACRUM / Consents]
+      parameters:
+        - name: consentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        204:
+          description: "Акцепт отозван"
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+        409:
+          description: "Акцепт уже отозван или истёк"
+          $ref: '#/components/schemas/ErrorResponse'
+
+  simulacrum_ConsentResponse:
+    schema:
+      type: object
+      properties:
+        consentId:
+          type: string
+          format: uuid
+          description: "externalConsentId — IS сохраняет это значение"
+        accountId:
+          type: string
+        status:
+          type: string
+          enum: [Pending, Active, Revoked, Expired]
+        totalDebitLimit:
+          type: string
+        maxSingleDebit:
+          type: string
+          nullable: true
+        currency:
+          type: string
+        purposeCode:
+          type: string
+          nullable: true
+        creditorSystemId:
+          type: string
+        grantedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [SIMULACRUM] Группа: Payments — инициирование и статус списания
+# ВЫЗЫВАЕТСЯ: IS → SIMULACRUM (синхронный REST-вызов)
+# Это единственный REST-канал IS → SIMULACRUM.
+# ─────────────────────────────────────────────────────────────────────────────
+
+  simulacrum_SubmitDebit:
+    POST /api/v1/payments/debit:
+      summary: "Инициировать списание по акцепту"
+      tags: [SIMULACRUM / Payments]
+      description: |
+        ## Кто вызывает
+        IS вызывает этот эндпоинт из HandleTriggerEventUseCase после получения
+        TriggerEventMessage от ORACLE через RabbitMQ.
+
+        ## Поведение симулякра
+        1. Проверить, что конент consentId существует и имеет статус Active.
+        2. Проверить, что сумма не превышает maxSingleDebit и не нарушает totalDebitLimit.
+        3. Создать запись TransactionHistory со статусом Pending.
+        4. Вернуть transactionId и статус Pending.
+        5. Асинхронно (в фоне, с задержкой 1–3 сек) перевести транзакцию
+           в AcceptedSettlementCompleted или Rejected.
+
+        ## Что делает IS после получения ответа
+        IS сохраняет transactionId как DebitOperation.externalTransactionId
+        и немедленно вызывает GET /api/v1/payments/{transactionId}/status
+        для получения финального статуса.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [consentId, sourceAccountId, recipientPaymentToken, amount, currency]
+              properties:
+                consentId:
+                  type: string
+                  format: uuid
+                  description: "Consent.externalConsentId из IS — ID акцепта в симулякре"
+                sourceAccountId:
+                  type: string
+                  description: "LinkedAccount.accountId пользователя в симулякре"
+                recipientPaymentToken:
+                  type: string
+                  description: "Платёжный токен счёта-получателя (напр., благотворительный фонд)"
+                amount:
+                  type: string
+                  example: "200.00"
+                  description: "Сумма списания. Должна совпадать с DebitConfig.debitAmount из UserScenario."
+                currency:
+                  type: string
+                  example: "RUB"
+              example:
+                consentId: "a1b2c3d4-1111-1111-1111-111111111111"
+                sourceAccountId: "ACC-TEST-001"
+                recipientPaymentToken: "charity-token-xyz"
+                amount: "200.00"
+                currency: "RUB"
+      responses:
+        202:
+          description: "Запрос на списание принят. Финальный статус — через GET /status."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [transactionId, status]
+                properties:
+                  transactionId:
+                    type: string
+                    description: "ID транзакции в симулякре. IS сохраняет как DebitOperation.externalTransactionId."
+                  status:
+                    type: string
+                    enum: [Pending]
+                    description: "Всегда Pending при создании."
+              example:
+                transactionId: "TX-DEBIT-2026-001"
+                status: "Pending"
+        400:
+          $ref: '#/components/schemas/ErrorResponse'
+        404:
+          description: "consentId или sourceAccountId не найден"
+          $ref: '#/components/schemas/ErrorResponse'
+        409:
+          description: |
+            Возможные причины (поле error):
+            CONSENT_INACTIVE      — акцепт не в статусе Active
+            CONSENT_LIMIT_EXCEEDED — сумма превышает лимит
+            ACCOUNT_DISABLED       — счёт заблокирован
+          $ref: '#/components/schemas/ErrorResponse'
+
+  simulacrum_GetDebitStatus:
+    GET /api/v1/payments/{transactionId}/status:
+      summary: "Получить статус операции списания"
+      tags: [SIMULACRUM / Payments]
+      description: |
+        ## Кто вызывает
+        IS вызывает этот эндпоинт сразу после POST /api/v1/payments/debit
+        для получения финального статуса (для MVP — синхронный polling).
+
+        ## Поведение IS при разных статусах
+        - AcceptedSettlementCompleted → execution.markCompleted()
+        - Rejected                   → execution.markFailed(failureCode, failureMessage)
+        - Pending / InProcess        → повторить запрос через 1 сек (max 5 попыток)
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [transactionId, status]
+                properties:
+                  transactionId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [Pending, AcceptedSettlementInProcess,
+                           AcceptedSettlementCompleted, Rejected]
+                  failureCode:
+                    type: string
+                    nullable: true
+                    description: "Заполнен только при status=Rejected"
+                    enum: [INSUFFICIENT_FUNDS, ACCOUNT_BLOCKED,
+                           CONSENT_REVOKED, TECHNICAL_ERROR]
+                  failureMessage:
+                    type: string
+                    nullable: true
+              example:
+                transactionId: "TX-DEBIT-2026-001"
+                status: "AcceptedSettlementCompleted"
+                failureCode: null
+                failureMessage: null
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [SIMULACRUM] Группа: Admin — генерация тестовых данных
+# ─────────────────────────────────────────────────────────────────────────────
+
+  simulacrum_GenerateTransaction:
+    POST /api/v1/admin/accounts/{accountId}/transactions/generate:
+      summary: "Сгенерировать тестовую транзакцию"
+      tags: [SIMULACRUM / Admin]
+      description: |
+        Административный эндпоинт. После создания транзакции в БД
+        SIMULACRUM публикует TransactionCreatedMessage в RabbitMQ
+        (exchange: simulacrum.events, routing key: transaction.created).
+        ORACLE подписан на это событие и обрабатывает его.
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, currency, creditDebitIndicator]
+              properties:
+                amount:
+                  type: string
+                  example: "350.00"
+                currency:
+                  type: string
+                  example: "RUB"
+                creditDebitIndicator:
+                  type: string
+                  enum: [Credit, Debit]
+                mccCode:
+                  type: integer
+                  example: 5912
+                  description: "Merchant Category Code. Ключевое поле для сценария Нежелательные покупки."
+                merchantName:
+                  type: string
+                  example: "Табакoff ООО"
+                merchantId:
+                  type: string
+                  example: "MERCH-777"
+                debtorName:
+                  type: string
+                creditorName:
+                  type: string
+                remittanceInformation:
+                  type: string
+              example:
+                amount: "350.00"
+                currency: "RUB"
+                creditDebitIndicator: "Debit"
+                mccCode: 5912
+                merchantName: "Табакoff ООО"
+                merchantId: "MERCH-777"
+                debtorName: "Иванов Иван Иванович"
+      responses:
+        201:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/simulacrum_TransactionResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# СЕРВИС: ORACLE
+# Базовый URL: http://oracle:8082
+# REST API: только /actuator/health
+# Вся интеграция — через RabbitMQ (см. rabbitmq_contract.yaml)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+  oracle_Health:
+    GET /actuator/health:
+      summary: "Проверка работоспособности Oracle"
+      tags: [ORACLE / Health]
+      description: |
+        Стандартный Spring Boot Actuator health endpoint.
+        IS или инфраструктура мониторинга могут вызывать его
+        для проверки доступности ORACLE перед публикацией ProfileSyncMessage.
+      servers:
+        - url: "http://oracle:8082"
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [UP, DOWN, OUT_OF_SERVICE]
+              example:
+                status: "UP"
+        503:
+          description: "Сервис недоступен"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# СЕРВИС: IS (Информационная система)
+# Базовый URL: http://is:8080
+# Swagger UI: http://is:8080/swagger-ui.html
+# Безопасность: JWT Bearer token (Spring Security)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [IS] Группа: Auth — аутентификация
+# ─────────────────────────────────────────────────────────────────────────────
+
+  is_Register:
+    POST /api/v1/auth/register:
+      summary: "Регистрация пользователя"
+      tags: [IS / Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, firstName, lastName, phoneNumber]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+                phoneNumber:
+                  type: string
+                  example: "+79001234567"
+      responses:
+        201:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/is_AuthResponse'
+        400:
+          $ref: '#/components/schemas/ErrorResponse'
+        409:
+          description: "Email уже зарегистрирован"
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_Login:
+    POST /api/v1/auth/login:
+      summary: "Получить JWT токен"
+      tags: [IS / Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/is_AuthResponse'
+        401:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_Refresh:
+    POST /api/v1/auth/refresh:
+      summary: "Обновить access token"
+      tags: [IS / Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/is_AuthResponse'
+        401:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_AuthResponse:
+    schema:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: "JWT. Передавать в заголовке: Authorization: Bearer <token>"
+        refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+          description: "Время жизни accessToken в секундах"
+        userId:
+          type: string
+          format: uuid
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [IS] Группа: Accounts — управление привязанными счетами
+# Требует: Authorization: Bearer <JWT>
+# ─────────────────────────────────────────────────────────────────────────────
+
+  is_LinkAccount:
+    POST /api/v1/accounts:
+      summary: "Привязать банковский счёт"
+      tags: [IS / Accounts]
+      description: |
+        Пользователь привязывает свой счёт к системе.
+        IS сохраняет paymentToken (не PAN) в LinkedAccount.
+        После привязки пользователь может выдать акцепт для этого счёта.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paymentToken, bankBic, currency, displayName]
+              properties:
+                paymentToken:
+                  type: string
+                  description: "Платёжный токен счёта. Совпадает с account в симулякре."
+                bankBic:
+                  type: string
+                  description: "BIC банка, 8 или 11 символов"
+                  example: "044525974"
+                currency:
+                  type: string
+                  example: "RUB"
+                displayName:
+                  type: string
+                  example: "Мой основной счёт"
+                maskedPan:
+                  type: string
+                  description: "Последние 4 цифры карты, только для отображения"
+                  example: "4321"
+      responses:
+        201:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/is_LinkedAccountResponse'
+        400:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_GetAccounts:
+    GET /api/v1/accounts:
+      summary: "Получить список привязанных счетов"
+      tags: [IS / Accounts]
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/is_LinkedAccountResponse'
+
+  is_UnlinkAccount:
+    DELETE /api/v1/accounts/{linkedAccountId}:
+      summary: "Отвязать счёт"
+      tags: [IS / Accounts]
+      parameters:
+        - name: linkedAccountId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        204:
+          description: "Счёт отвязан"
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+        409:
+          description: "У счёта есть активные сценарии"
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_LinkedAccountResponse:
+    schema:
+      type: object
+      properties:
+        linkedAccountId:
+          type: string
+          format: uuid
+        paymentToken:
+          type: string
+        maskedPan:
+          type: string
+        bankBic:
+          type: string
+        displayName:
+          type: string
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [PendingVerification, Active, Revoked, Expired]
+        linkedAt:
+          type: string
+          format: date-time
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [IS] Группа: Consents — управление предварительно данным акцептом
+# ─────────────────────────────────────────────────────────────────────────────
+
+  is_GrantConsent:
+    POST /api/v1/accounts/{linkedAccountId}/consent:
+      summary: "Выдать акцепт на списание"
+      tags: [IS / Consents]
+      description: |
+        IS регистрирует акцепт локально и вызывает
+        POST http://simulacrum:8081/api/v1/consents
+        для регистрации в симулякре. Возвращённый externalConsentId
+        сохраняется в Consent.externalConsentId.
+      parameters:
+        - name: linkedAccountId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [totalDebitLimit, currency]
+              properties:
+                totalDebitLimit:
+                  type: string
+                  example: "10000.00"
+                maxSingleDebit:
+                  type: string
+                  example: "500.00"
+                  nullable: true
+                currency:
+                  type: string
+                  example: "RUB"
+                expiresAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        201:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/is_ConsentResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_RevokeConsent:
+    DELETE /api/v1/accounts/{linkedAccountId}/consent:
+      summary: "Отозвать акцепт"
+      tags: [IS / Consents]
+      description: |
+        IS отзывает акцепт локально и вызывает
+        DELETE http://simulacrum:8081/api/v1/consents/{externalConsentId}.
+        Также публикует ProfileSyncMessage (action=PAUSE или TERMINATE)
+        для всех активных сценариев этого счёта.
+      parameters:
+        - name: linkedAccountId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        204:
+          description: "Акцепт отозван"
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_ConsentResponse:
+    schema:
+      type: object
+      properties:
+        consentId:
+          type: string
+          format: uuid
+        linkedAccountId:
+          type: string
+          format: uuid
+        externalConsentId:
+          type: string
+          format: uuid
+          description: "ID акцепта в симулякре"
+        status:
+          type: string
+          enum: [Pending, Active, Revoked, Expired]
+        totalDebitLimit:
+          type: string
+        maxSingleDebit:
+          type: string
+          nullable: true
+        currency:
+          type: string
+        grantedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [IS] Группа: Scenarios — управление сценариями
+# ─────────────────────────────────────────────────────────────────────────────
+
+  is_GetScenarioTemplates:
+    GET /api/v1/scenarios/templates:
+      summary: "Получить каталог доступных сценариев"
+      tags: [IS / Scenarios]
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/is_ScenarioTemplateResponse'
+
+  is_ScenarioTemplateResponse:
+    schema:
+      type: object
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        scenarioTypeCode:
+          type: string
+          example: "UNDESIRABLE_PURCHASE"
+        name:
+          type: string
+          example: "Нежелательные покупки"
+        description:
+          type: string
+        isPublished:
+          type: boolean
+
+  is_ActivateScenario:
+    POST /api/v1/scenarios:
+      summary: "Активировать сценарий"
+      tags: [IS / Scenarios]
+      description: |
+        Активирует сценарий для текущего пользователя.
+        После сохранения IS публикует ProfileSyncMessage (action=REGISTER)
+        в RabbitMQ (exchange: is.events, routing key: scenario.profile.sync).
+        ORACLE подписан и создаёт WatchProfile + ActiveRule.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [templateId, linkedAccountId, debitAmount, currency, recipientPaymentToken]
+              properties:
+                templateId:
+                  type: string
+                  format: uuid
+                linkedAccountId:
+                  type: string
+                  format: uuid
+                  description: "Счёт, с которого будут производиться списания"
+                debitAmount:
+                  type: string
+                  example: "200.00"
+                  description: "Сумма каждого списания при срабатывании"
+                currency:
+                  type: string
+                  example: "RUB"
+                recipientPaymentToken:
+                  type: string
+                  description: "Счёт-получатель средств"
+                scenarioConfig:
+                  type: object
+                  description: |
+                    Конфигурация, специфичная для типа сценария.
+                    Для UNDESIRABLE_PURCHASE:
+                      mccCodes: ["5912", "5813", "5994"]   — список MCC
+                      merchantRules: [{ field: "MerchantName", operator: "Contains", value: "Табак" }]
+                      amountThreshold: { operator: "GreaterThan", amount: "0.00" }  — опционально
+                      matchMode: "ANY"   — ANY (любое условие) или ALL (все условия)
+              example:
+                templateId: "tmpl-uuid-0001"
+                linkedAccountId: "acct-uuid-0001"
+                debitAmount: "200.00"
+                currency: "RUB"
+                recipientPaymentToken: "charity-token-xyz"
+                scenarioConfig:
+                  mccCodes: ["5912", "5813", "5994"]
+                  matchMode: "ANY"
+      responses:
+        201:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/is_UserScenarioResponse'
+        400:
+          $ref: '#/components/schemas/ErrorResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+        409:
+          description: "Сценарий этого типа уже активен для данного счёта"
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_GetUserScenarios:
+    GET /api/v1/scenarios:
+      summary: "Получить список активных сценариев пользователя"
+      tags: [IS / Scenarios]
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/is_UserScenarioResponse'
+
+  is_UpdateScenario:
+    PUT /api/v1/scenarios/{userScenarioId}:
+      summary: "Обновить конфигурацию сценария"
+      tags: [IS / Scenarios]
+      description: |
+        IS обновляет конфигурацию, увеличивает ruleVersion,
+        публикует ProfileSyncMessage (action=UPDATE_RULES).
+      parameters:
+        - name: userScenarioId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                debitAmount:
+                  type: string
+                recipientPaymentToken:
+                  type: string
+                scenarioConfig:
+                  type: object
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/is_UserScenarioResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_DeactivateScenario:
+    DELETE /api/v1/scenarios/{userScenarioId}:
+      summary: "Деактивировать сценарий"
+      tags: [IS / Scenarios]
+      description: |
+        IS деактивирует сценарий и публикует
+        ProfileSyncMessage (action=TERMINATE).
+      parameters:
+        - name: userScenarioId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        204:
+          description: "Сценарий деактивирован"
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_UserScenarioResponse:
+    schema:
+      type: object
+      properties:
+        userScenarioId:
+          type: string
+          format: uuid
+        templateId:
+          type: string
+          format: uuid
+        scenarioTypeCode:
+          type: string
+        linkedAccountId:
+          type: string
+          format: uuid
+        debitAmount:
+          type: string
+        currency:
+          type: string
+        isActive:
+          type: boolean
+        activatedAt:
+          type: string
+          format: date-time
+        lastTriggeredAt:
+          type: string
+          format: date-time
+          nullable: true
+        scenarioConfig:
+          type: object
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [IS] Группа: Executions — история срабатываний
+# ─────────────────────────────────────────────────────────────────────────────
+
+  is_GetExecutions:
+    GET /api/v1/scenarios/{userScenarioId}/executions:
+      summary: "История срабатываний сценария"
+      tags: [IS / Executions]
+      parameters:
+        - name: userScenarioId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: page
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/is_ExecutionResponse'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+
+  is_GetExecution:
+    GET /api/v1/executions/{executionId}:
+      summary: "Получить одно срабатывание"
+      tags: [IS / Executions]
+      parameters:
+        - name: executionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/is_ExecutionResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_ExecutionResponse:
+    schema:
+      type: object
+      properties:
+        executionId:
+          type: string
+          format: uuid
+        userScenarioId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [Pending, DebitInitiated, Completed, Failed]
+        triggerSnapshot:
+          type: object
+          properties:
+            transactionId: { type: string }
+            mccCode: { type: string }
+            merchantName: { type: string }
+            amount: { type: string }
+            currency: { type: string }
+            occurredAt: { type: string, format: date-time }
+        debitOperation:
+          type: object
+          nullable: true
+          properties:
+            debitOperationId: { type: string, format: uuid }
+            externalTransactionId: { type: string }
+            amount: { type: string }
+            status:
+              type: string
+              enum: [Pending, AcceptedSettlementInProcess,
+                     AcceptedSettlementCompleted, Rejected]
+            failureCode: { type: string, nullable: true }
+            failureMessage: { type: string, nullable: true }
+            initiatedAt: { type: string, format: date-time }
+            completedAt: { type: string, format: date-time, nullable: true }
+        triggeredAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [IS] Группа: Notifications
+# ─────────────────────────────────────────────────────────────────────────────
+
+  is_GetNotifications:
+    GET /api/v1/notifications:
+      summary: "Получить уведомления пользователя"
+      tags: [IS / Notifications]
+      parameters:
+        - name: unreadOnly
+          in: query
+          schema: { type: boolean, default: false }
+        - name: page
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        notificationId: { type: string, format: uuid }
+                        type:
+                          type: string
+                          enum: [ScenarioTriggered, DebitCompleted, DebitFailed,
+                                 ConsentExpiringSoon, ConsentRevoked]
+                        payload: { type: object }
+                        isRead: { type: boolean }
+                        createdAt: { type: string, format: date-time }
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+
+  is_MarkNotificationRead:
+    PATCH /api/v1/notifications/{notificationId}/read:
+      summary: "Отметить уведомление как прочитанное"
+      tags: [IS / Notifications]
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        204:
+          description: "Отмечено"
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [IS] Группа: Admin — управление системой (роль Admin)
+# ─────────────────────────────────────────────────────────────────────────────
+
+  is_AdminGetUsers:
+    GET /api/v1/admin/users:
+      summary: "Список пользователей (Admin)"
+      tags: [IS / Admin]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        userId: { type: string, format: uuid }
+                        email: { type: string }
+                        firstName: { type: string }
+                        lastName: { type: string }
+                        status: { type: string, enum: [PendingVerification, Active, Blocked, Deleted] }
+                        createdAt: { type: string, format: date-time }
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+        403:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_AdminBlockUser:
+    PATCH /api/v1/admin/users/{userId}/status:
+      summary: "Изменить статус пользователя (Admin)"
+      tags: [IS / Admin]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [Active, Blocked]
+      responses:
+        200:
+          description: "Статус обновлён"
+        403:
+          $ref: '#/components/schemas/ErrorResponse'
+        404:
+          $ref: '#/components/schemas/ErrorResponse'
+
+  is_AdminCreateTemplate:
+    POST /api/v1/admin/scenarios/templates:
+      summary: "Добавить сценарий в каталог (Admin)"
+      tags: [IS / Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenarioTypeCode, name, description]
+              properties:
+                scenarioTypeCode:
+                  type: string
+                  example: "UNDESIRABLE_PURCHASE"
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        201:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/is_ScenarioTemplateResponse'
+        403:
+          $ref: '#/components/schemas/ErrorResponse'
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# РАЗДЕЛ: МАТРИЦА ВЫЗОВОВ МЕЖДУ СЕРВИСАМИ
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Caller       HTTP Method   URL (сервис:порт)                         Когда
+# ─────────────────────────────────────────────────────────────────────────────
+# IS        →  POST          simulacrum:8081/api/v1/consents            При выдаче ПДА
+# IS        →  DELETE        simulacrum:8081/api/v1/consents/{id}       При отзыве ПДА
+# IS        →  POST          simulacrum:8081/api/v1/payments/debit      После TriggerEvent от Oracle
+# IS        →  GET           simulacrum:8081/api/v1/payments/{id}/status После submit debit
+# IS        →  GET           oracle:8082/actuator/health                Опционально, healthcheck
+#
+# SIMULACRUM не вызывает IS и ORACLE по REST.
+# ORACLE не вызывает IS и SIMULACRUM по REST.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# РАЗДЕЛ: ИНСТРУКЦИИ ДЛЯ АГЕНТОВ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+agent_instructions:
+
+  SIMULACRUM:
+    implement: >
+      Реализуй все эндпоинты из секций [SIMULACRUM / Accounts],
+      [SIMULACRUM / Transactions], [SIMULACRUM / Consents],
+      [SIMULACRUM / Payments], [SIMULACRUM / Admin].
+      Spring Security не нужен — сервис доступен только изнутри сети.
+      После POST /admin/.../generate публикуй TransactionCreatedMessage
+      в RabbitMQ согласно rabbitmq_contract.yaml (MSG-001).
+    do_not_implement: >
+      Не реализуй эндпоинты IS и ORACLE.
+      Не вызывай IS или ORACLE по REST.
+    critical: >
+      POST /api/v1/payments/debit должен возвращать 202 с transactionId немедленно.
+      Перевод в финальный статус (AcceptedSettlementCompleted / Rejected) —
+      асинхронно через 1–3 секунды. IS будет polling GET /status.
+
+  ORACLE:
+    implement: >
+      Реализуй только GET /actuator/health.
+      Всё остальное взаимодействие — через RabbitMQ (rabbitmq_contract.yaml).
+    do_not_implement: >
+      Не реализуй REST API. Не вызывай SIMULACRUM или IS по REST.
+
+  IS:
+    implement: >
+      Реализуй все эндпоинты из секций [IS / Auth], [IS / Accounts],
+      [IS / Consents], [IS / Scenarios], [IS / Executions],
+      [IS / Notifications], [IS / Admin].
+      При выдаче ПДА — вызывай POST simulacrum:8081/api/v1/consents.
+      При отзыве ПДА — вызывай DELETE simulacrum:8081/api/v1/consents/{id}.
+      После получения TriggerEventMessage из RabbitMQ — вызывай
+      POST simulacrum:8081/api/v1/payments/debit, затем GET /status.
+      После активации/обновления/деактивации сценария — публикуй
+      ProfileSyncMessage в RabbitMQ (rabbitmq_contract.yaml, MSG-002).
+    do_not_implement: >
+      Не реализуй эндпоинты SIMULACRUM и ORACLE.
+    critical: >
+      Все пользовательские эндпоинты требуют JWT (Spring Security).
+      Роль Admin (@PreAuthorize("hasRole('ADMIN')")) — для /api/v1/admin/*.
+      paymentToken никогда не возвращай в ответах API (только maskedPan).

@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
+import ru.stepanov.selfcontrol.config.IsProperties;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
@@ -25,15 +26,26 @@ public class SimulacrumClient {
     private final ObjectMapper objectMapper;
     private final SimulacrumApiLogService apiLogService;
     private final SimulacrumApiLogRepository apiLogRepository;
+    /** Идентификатор IS для Simulacrum ({@code creditorSystemId}); используется в задачах 2.x (consents). */
+    private final String creditorSystemId;
 
     public SimulacrumClient(@Value("${simulacrum.base-url:http://localhost:8081}") String baseUrl,
                             ObjectMapper objectMapper,
                             SimulacrumApiLogService apiLogService,
-                            SimulacrumApiLogRepository apiLogRepository) {
+                            SimulacrumApiLogRepository apiLogRepository,
+                            IsProperties isProperties) {
         this.rest = RestClient.builder().baseUrl(baseUrl).build();
         this.objectMapper = objectMapper;
         this.apiLogService = apiLogService;
         this.apiLogRepository = apiLogRepository;
+        this.creditorSystemId = isProperties.creditorSystemId();
+    }
+
+    /**
+     * {@code creditorSystemId} из контракта Simulacrum (POST /api/v1/consents).
+     */
+    public String getCreditorSystemId() {
+        return creditorSystemId;
     }
 
     public List<Account> getAccounts(UUID userId) {
