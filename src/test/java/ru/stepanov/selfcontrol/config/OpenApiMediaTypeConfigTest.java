@@ -36,7 +36,7 @@ class OpenApiMediaTypeConfigTest {
         Operation publicTemplateOperation = new Operation();
         OpenAPI openApi = new OpenAPI().paths(new Paths()
                 .addPathItem("/api/v1/auth/login", new PathItem().post(authOperation))
-                .addPathItem("/api/v1/scenario-templates", new PathItem().get(publicTemplateOperation)));
+                .addPathItem("/api/v1/scenarios/templates", new PathItem().get(publicTemplateOperation)));
 
         config.openApiJsonMediaTypeCustomizer().customise(openApi);
 

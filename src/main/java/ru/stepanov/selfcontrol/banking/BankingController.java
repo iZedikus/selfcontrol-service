@@ -27,7 +27,9 @@ public class BankingController {
 
     @PostMapping("/accounts")
     LinkedAccount add(@RequestBody LinkAccountRequest request) {
-        return accountLifecycle.linkAccount(auth.userId(), request.accountId());
+        return accountLifecycle.linkAccount(auth.userId(),
+                new ru.stepanov.selfcontrol.api.contract.account.LinkAccountRequest(
+                        request.accountId(), "044525974", "RUB", "Account", null));
     }
 
     @DeleteMapping("/accounts/{id}")
@@ -39,17 +41,17 @@ public class BankingController {
     }
 
     @GetMapping("/acceptances")
-    List<Acceptance> acceptances() {
-        return acceptanceService.findUserAcceptances(auth.userId());
+    List<Consent> acceptances() {
+        return acceptanceService.findUserConsents(auth.userId());
     }
 
     @PostMapping("/acceptances")
-    Acceptance createAcceptance(@RequestBody GrantAcceptanceRequest request) {
+    Consent createAcceptance(@RequestBody GrantAcceptanceRequest request) {
         return acceptanceService.grant(auth.userId(), request);
     }
 
     @PostMapping("/acceptances/{id}/revoke")
-    Acceptance revoke(@PathVariable UUID id) {
+    Consent revoke(@PathVariable UUID id) {
         return acceptanceService.revoke(auth.userId(), id);
     }
 }

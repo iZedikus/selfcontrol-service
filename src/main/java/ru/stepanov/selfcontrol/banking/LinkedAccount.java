@@ -14,9 +14,6 @@ public class LinkedAccount {
     private UUID linkedAccountId;
     @Column(name = "user_id", nullable = false)
     private UUID userId;
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "acceptance_id")
-    private Acceptance acceptance;
     @Column(name = "external_account_id")
     private String externalAccountId;
     private String displayName;
@@ -56,14 +53,6 @@ public class LinkedAccount {
 
     public void setUserId(UUID userId) {
         this.userId = userId;
-    }
-
-    public Acceptance getAcceptance() {
-        return acceptance;
-    }
-
-    public void setAcceptance(Acceptance acceptance) {
-        this.acceptance = acceptance;
     }
 
     public String getExternalAccountId() {

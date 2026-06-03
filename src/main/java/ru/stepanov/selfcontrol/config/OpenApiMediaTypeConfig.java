@@ -56,7 +56,7 @@ public class OpenApiMediaTypeConfig {
 
     private boolean isPublicEndpoint(String path, PathItem pathItem, Operation operation) {
         return path.startsWith("/api/v1/auth/")
-                || ("/api/v1/scenario-templates".equals(path) && pathItem.getGet() == operation);
+                || ("/api/v1/scenarios/templates".equals(path) && pathItem.getGet() == operation);
     }
 
     private void replaceWildcardWithJson(Content content) {

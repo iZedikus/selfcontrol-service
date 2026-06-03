@@ -7,11 +7,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
-import ru.stepanov.selfcontrol.config.IsProperties;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import ru.stepanov.selfcontrol.config.IsProperties;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
 
@@ -20,13 +19,13 @@ public class SimulacrumClient {
     public static final String OPERATION_GET_ACCOUNTS = "GET_ACCOUNTS";
     public static final String OPERATION_GRANT_CONSENT = "GRANT_CONSENT";
     public static final String OPERATION_REVOKE_CONSENT = "REVOKE_CONSENT";
-    public static final String OPERATION_INITIATE_DEBIT = "INITIATE_DEBIT";
+    public static final String OPERATION_SUBMIT_DEBIT = "SUBMIT_DEBIT";
+    public static final String OPERATION_GET_DEBIT_STATUS = "GET_DEBIT_STATUS";
 
     private final RestClient rest;
     private final ObjectMapper objectMapper;
     private final SimulacrumApiLogService apiLogService;
     private final SimulacrumApiLogRepository apiLogRepository;
-    /** Идентификатор IS для Simulacrum ({@code creditorSystemId}); используется в задачах 2.x (consents). */
     private final String creditorSystemId;
 
     public SimulacrumClient(@Value("${simulacrum.base-url:http://localhost:8081}") String baseUrl,
@@ -34,40 +33,51 @@ public class SimulacrumClient {
                             SimulacrumApiLogService apiLogService,
                             SimulacrumApiLogRepository apiLogRepository,
                             IsProperties isProperties) {
-        this.rest = RestClient.builder().baseUrl(baseUrl).build();
+        this(RestClient.builder().baseUrl(baseUrl).build(), objectMapper, apiLogService, apiLogRepository, isProperties);
+    }
+
+    SimulacrumClient(RestClient rest,
+                     ObjectMapper objectMapper,
+                     SimulacrumApiLogService apiLogService,
+                     SimulacrumApiLogRepository apiLogRepository,
+                     IsProperties isProperties) {
+        this.rest = rest;
         this.objectMapper = objectMapper;
         this.apiLogService = apiLogService;
         this.apiLogRepository = apiLogRepository;
         this.creditorSystemId = isProperties.creditorSystemId();
     }
 
-    /**
-     * {@code creditorSystemId} из контракта Simulacrum (POST /api/v1/consents).
-     */
     public String getCreditorSystemId() {
         return creditorSystemId;
     }
 
+    /**
+     * Внутренний вызов (привязка счёта через Simulacrum). Не является публичным API IS.
+     */
     public List<Account> getAccounts(UUID userId) {
         return parseAccounts(call("GET", "/api/v1/users/" + userId + "/accounts", null, OPERATION_GET_ACCOUNTS, userId));
     }
 
-    public GrantConsentResponse grantConsent(UUID userId, GrantConsentRequest request) {
-        return parseGrantConsentResponse(call("POST", "/api/v1/consents", request, OPERATION_GRANT_CONSENT, userId));
+    public GrantConsentResponse grantConsent(UUID userId, RegisterConsentRequest request) {
+        RegisterConsentRequest body = withCreditorSystemId(request);
+        return parseGrantConsentResponse(call("POST", "/api/v1/consents", body, OPERATION_GRANT_CONSENT, userId));
     }
 
-    public RevokeConsentResponse revokeConsent(UUID userId, String consentId) {
-        return parseRevokeConsentResponse(call("POST", "/api/v1/consents/" + consentId + "/revoke", null, OPERATION_REVOKE_CONSENT, userId), consentId);
+    public void revokeConsent(UUID userId, String consentId) {
+        call("DELETE", "/api/v1/consents/" + consentId, null, OPERATION_REVOKE_CONSENT, userId);
     }
 
-    public InitiateDebitResponse initiateDebit(UUID userId, InitiateDebitRequest request) {
-        return parseInitiateDebitResponse(call("POST", "/api/v1/debits", request, OPERATION_INITIATE_DEBIT, userId));
+    public PaymentDebitSubmitResponse submitDebit(UUID userId, PaymentDebitRequest request) {
+        return parseSubmitDebitResponse(call("POST", "/api/v1/payments/debit", request, OPERATION_SUBMIT_DEBIT, userId));
     }
 
-    /**
-     * Backward-compatible DTO view for legacy callers. Administrative log endpoints must use
-     * {@link SimulacrumApiLogRepository} directly for filtering and pagination.
-     */
+    public PaymentStatusResponse getDebitStatus(UUID userId, String transactionId) {
+        return parsePaymentStatusResponse(
+                call("GET", "/api/v1/payments/" + transactionId + "/status", null, OPERATION_GET_DEBIT_STATUS, userId)
+        );
+    }
+
     public List<ApiLog> log() {
         return apiLogRepository.findAll(org.springframework.data.domain.PageRequest.of(0, 100,
                         org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "createdAt")))
@@ -75,6 +85,21 @@ public class SimulacrumClient {
                         entry.getResponseStatus() == null ? 0 : entry.getResponseStatus(),
                         entry.getResponseBody() != null ? entry.getResponseBody() : entry.getErrorMessage()))
                 .toList();
+    }
+
+    private RegisterConsentRequest withCreditorSystemId(RegisterConsentRequest request) {
+        if (request.creditorSystemId() != null && !request.creditorSystemId().isBlank()) {
+            return request;
+        }
+        return new RegisterConsentRequest(
+                request.accountId(),
+                request.totalDebitLimit(),
+                request.maxSingleDebit(),
+                request.currency(),
+                request.purposeCode(),
+                creditorSystemId,
+                request.expiresAt()
+        );
     }
 
     private List<Account> parseAccounts(String response) {
@@ -95,7 +120,7 @@ public class SimulacrumClient {
     private GrantConsentResponse parseGrantConsentResponse(String response) {
         JsonNode root = readObject(response, "grant consent");
         return new GrantConsentResponse(
-                firstText(root, "consentId", "externalConsentId", "pdaId", "pdaID", "id"),
+                firstText(root, "consentId", "externalConsentId", "id"),
                 firstText(root, "status", "state"),
                 firstText(root, "grantedAt", "issuedAt", "createdAt"),
                 firstText(root, "expiresAt", "validUntil", "expirationDate"),
@@ -103,23 +128,21 @@ public class SimulacrumClient {
         );
     }
 
-    private RevokeConsentResponse parseRevokeConsentResponse(String response, String consentId) {
-        JsonNode root = readObject(response, "revoke consent");
-        return new RevokeConsentResponse(
-                Optional.ofNullable(firstText(root, "consentId", "externalConsentId", "pdaId", "pdaID", "id")).orElse(consentId),
-                firstText(root, "status", "state"),
-                root
+    private PaymentDebitSubmitResponse parseSubmitDebitResponse(String response) {
+        JsonNode root = readObject(response, "submit debit");
+        return new PaymentDebitSubmitResponse(
+                firstText(root, "transactionId", "externalTransactionId", "id"),
+                firstText(root, "status", "state")
         );
     }
 
-    private InitiateDebitResponse parseInitiateDebitResponse(String response) {
-        JsonNode root = readObject(response, "initiate debit");
-        return new InitiateDebitResponse(
-                firstText(root, "transactionId", "externalTransactionId", "debitId", "id"),
+    private PaymentStatusResponse parsePaymentStatusResponse(String response) {
+        JsonNode root = readObject(response, "debit status");
+        return new PaymentStatusResponse(
+                firstText(root, "transactionId", "externalTransactionId", "id"),
                 firstText(root, "status", "state"),
-                firstText(root, "code", "errorCode"),
-                firstText(root, "message", "errorMessage"),
-                root
+                firstText(root, "failureCode", "errorCode", "code"),
+                firstText(root, "failureMessage", "errorMessage", "message")
         );
     }
 
@@ -196,7 +219,12 @@ public class SimulacrumClient {
         try {
             ResponseEntity<String> response = switch (method) {
                 case "POST" -> rest.post().uri(path).body(body == null ? Map.of() : body).retrieve().toEntity(String.class);
-                default -> rest.get().uri(path).retrieve().toEntity(String.class);
+                case "DELETE" -> {
+                    var deleted = rest.delete().uri(path).retrieve().toBodilessEntity();
+                    yield ResponseEntity.status(deleted.getStatusCode()).body("");
+                }
+                case "GET" -> rest.get().uri(path).retrieve().toEntity(String.class);
+                default -> throw new IllegalArgumentException("Unsupported HTTP method: " + method);
             };
             record(method, path, requestBody, response.getStatusCode().value(), response.getBody(), null, correlationId, operationType, userId);
             return response.getBody();
@@ -237,33 +265,7 @@ public class SimulacrumClient {
                           String bank, String status, String paymentToken) {
     }
 
-    public record ConsentAccount(String linkedAccountId, String externalAccountId, String displayName, String maskedPan,
-                                 String currency, String paymentToken, String bankBic, String bankName) {
-    }
-
-    public record GrantConsentRequest(UUID userId, List<UUID> linkedAccountIds, List<ConsentAccount> accounts,
-                                      AcceptanceLimits limits, Instant expiresAt, String purpose,
-                                      List<String> permissions, Map<String, Object> parameters) {
-    }
-
-    public record AcceptanceLimits(MoneyDto totalDebitLimit, MoneyDto maxSingleDebit) {
-    }
-
-    public record MoneyDto(BigDecimal amount, String currency) {
-    }
-
     public record GrantConsentResponse(String consentId, String status, String grantedAt, String expiresAt, JsonNode raw) {
-    }
-
-    public record RevokeConsentResponse(String consentId, String status, JsonNode raw) {
-    }
-
-    public record InitiateDebitRequest(UUID userId, UUID userScenarioId, UUID triggerEventId,
-                                       String triggerTransactionId, UUID sourceAccountId, UUID consentId,
-                                       String recipientPaymentToken, MoneyDto amount) {
-    }
-
-    public record InitiateDebitResponse(String transactionId, String status, String code, String message, JsonNode raw) {
     }
 
     public record ApiLog(Instant at, String method, String path, int status, String response) {

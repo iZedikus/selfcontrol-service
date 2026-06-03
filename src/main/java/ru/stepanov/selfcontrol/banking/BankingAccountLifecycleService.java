@@ -4,8 +4,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import ru.stepanov.selfcontrol.api.contract.account.LinkAccountRequest;
 import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.common.CurrencyCode;
+import ru.stepanov.selfcontrol.scenario.UserScenarioRepository;
 import ru.stepanov.selfcontrol.simulacrum.SimulacrumClient;
 
 import java.time.Instant;
@@ -15,25 +17,30 @@ import java.util.UUID;
 @Service
 public class BankingAccountLifecycleService {
     private final LinkedAccountRepository accounts;
-    private final AcceptanceRepository acceptances;
+    private final ConsentRepository consents;
+    private final UserScenarioRepository userScenarios;
     private final SimulacrumClient simulacrum;
     private final AuditService audit;
 
-    public BankingAccountLifecycleService(LinkedAccountRepository accounts, AcceptanceRepository acceptances, SimulacrumClient simulacrum, AuditService audit) {
+    public BankingAccountLifecycleService(LinkedAccountRepository accounts,
+                                          ConsentRepository consents,
+                                          UserScenarioRepository userScenarios,
+                                          SimulacrumClient simulacrum,
+                                          AuditService audit) {
         this.accounts = accounts;
-        this.acceptances = acceptances;
+        this.consents = consents;
+        this.userScenarios = userScenarios;
         this.simulacrum = simulacrum;
         this.audit = audit;
     }
 
     @Transactional
-    public LinkedAccount linkAccount(UUID userId, String externalAccountId) {
-        if (externalAccountId == null || externalAccountId.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "accountId is required");
-        }
+    public LinkedAccount linkAccount(UUID userId, LinkAccountRequest request) {
+        validateLinkRequest(request);
+        String paymentToken = request.paymentToken().trim();
 
         SimulacrumClient.Account externalAccount = simulacrum.getAccounts(userId).stream()
-                .filter(account -> externalAccountId.equals(account.accountId()))
+                .filter(account -> paymentToken.equals(account.accountId()) || paymentToken.equals(account.paymentToken()))
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "Account is not available in Simulacrum"));
 
@@ -41,10 +48,10 @@ public class BankingAccountLifecycleService {
                 .orElseGet(LinkedAccount::new);
         account.setUserId(userId);
         account.setExternalAccountId(externalAccount.accountId());
-        account.setDisplayName(externalAccount.displayName());
-        account.setMaskedPAN(externalAccount.maskedPan());
-        account.setCurrency(toCurrency(externalAccount.currency()));
-        account.setBankBIC(toBankBIC(externalAccount));
+        account.setDisplayName(blankToNull(request.displayName()) != null ? request.displayName().trim() : externalAccount.displayName());
+        account.setMaskedPAN(blankToNull(request.maskedPan()) != null ? request.maskedPan().trim() : externalAccount.maskedPan());
+        account.setCurrency(toCurrency(request.currency()));
+        account.setBankBIC(new BankBIC(request.bankBic().trim()));
         account.setBankName(blankToNull(externalAccount.bank()));
         account.setPaymentToken(toPaymentToken(externalAccount));
         account.setStatus(toStatus(externalAccount.status()));
@@ -64,9 +71,11 @@ public class BankingAccountLifecycleService {
         if (!userId.equals(account.getUserId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Linked account belongs to another user");
         }
+        if (userScenarios.existsByActiveTrueAndDebitConfig_SourceAccountId(linkedAccountId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Linked account has active scenarios");
+        }
         account.setStatus(LinkedAccountStatus.Revoked);
         account.setPaymentToken(null);
-        account.setAcceptance(null);
         account.setExpiresAt(Instant.now());
         LinkedAccount saved = accounts.save(account);
         audit.record(userId, userId, "BANK_ACCOUNT_UNLINKED", "LINKED_ACCOUNT", saved.getLinkedAccountId(), Map.of(
@@ -82,14 +91,13 @@ public class BankingAccountLifecycleService {
         accounts.findByUserId(userId).forEach(account -> {
             account.setStatus(LinkedAccountStatus.Revoked);
             account.setPaymentToken(null);
-            account.setAcceptance(null);
             account.setExpiresAt(now);
             accounts.save(account);
         });
-        acceptances.findByUserId(userId).forEach(acceptance -> {
-            acceptance.setStatus(AcceptanceStatus.Revoked);
-            acceptance.setRevokedAt(now);
-            acceptances.save(acceptance);
+        consents.findByUserId(userId).forEach(consent -> {
+            consent.setStatus(AcceptanceStatus.Revoked);
+            consent.setRevokedAt(now);
+            consents.save(consent);
         });
     }
 
@@ -129,6 +137,28 @@ public class BankingAccountLifecycleService {
             case "PENDING", "PENDING_VERIFICATION" -> LinkedAccountStatus.PendingVerification;
             default -> throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Unsupported Simulacrum account status: " + value);
         };
+    }
+
+    private void validateLinkRequest(LinkAccountRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Request body is required");
+        }
+        if (request.paymentToken() == null || request.paymentToken().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "paymentToken is required");
+        }
+        if (request.bankBic() == null || request.bankBic().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "bankBic is required");
+        }
+        int bicLen = request.bankBic().trim().length();
+        if (bicLen != 8 && bicLen != 11) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "bankBic must be 8 or 11 characters");
+        }
+        if (request.currency() == null || request.currency().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "currency is required");
+        }
+        if (request.displayName() == null || request.displayName().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "displayName is required");
+        }
     }
 
     private String blankToNull(String value) {

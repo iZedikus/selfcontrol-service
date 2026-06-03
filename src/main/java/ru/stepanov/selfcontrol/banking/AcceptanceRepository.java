@@ -1,9 +1,0 @@
-package ru.stepanov.selfcontrol.banking;
-
-import org.springframework.data.jpa.repository.JpaRepository;
-
-import java.util.*;
-
-public interface AcceptanceRepository extends JpaRepository<Acceptance, UUID> {
-    List<Acceptance> findByUserId(UUID userId);
-}

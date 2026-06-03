@@ -1,8 +1,8 @@
 package ru.stepanov.selfcontrol.api.v1;
 
 import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import ru.stepanov.selfcontrol.api.contract.consent.ConsentResponse;
 import ru.stepanov.selfcontrol.api.contract.consent.GrantConsentRequest;
 import ru.stepanov.selfcontrol.api.mapper.ConsentMapper;
@@ -15,7 +15,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -41,31 +40,26 @@ public class ConsentsController {
     @ResponseStatus(HttpStatus.CREATED)
     ConsentResponse grant(@PathVariable UUID linkedAccountId, @RequestBody GrantConsentRequest request) {
         ensureAccountOwned(linkedAccountId);
-        Acceptance acceptance = acceptanceService.grant(auth.userId(), toGrantRequest(linkedAccountId, request));
-        return ConsentMapper.toResponse(acceptance, linkedAccountId);
+        Consent consent = acceptanceService.grant(auth.userId(), linkedAccountId, toGrantRequest(request));
+        return ConsentMapper.toResponse(consent);
     }
 
     @DeleteMapping
     @ResponseStatus(HttpStatus.NO_CONTENT)
     void revoke(@PathVariable UUID linkedAccountId) {
-        LinkedAccount account = ensureAccountOwned(linkedAccountId);
-        Acceptance acceptance = account.getAcceptance();
-        if (acceptance == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Consent not found for account: " + linkedAccountId);
-        }
-        acceptanceService.revoke(auth.userId(), acceptance.getAcceptanceId());
+        ensureAccountOwned(linkedAccountId);
+        acceptanceService.revokeByLinkedAccountId(auth.userId(), linkedAccountId);
     }
 
-    private LinkedAccount ensureAccountOwned(UUID linkedAccountId) {
+    private void ensureAccountOwned(UUID linkedAccountId) {
         LinkedAccount account = accounts.findById(linkedAccountId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Linked account not found: " + linkedAccountId));
         if (!auth.userId().equals(account.getUserId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Linked account belongs to another user");
         }
-        return account;
     }
 
-    private GrantAcceptanceRequest toGrantRequest(UUID linkedAccountId, GrantConsentRequest request) {
+    private GrantAcceptanceRequest toGrantRequest(GrantConsentRequest request) {
         AcceptanceLimit limit = new AcceptanceLimit();
         CurrencyCode currency = CurrencyCode.valueOf(request.currency());
         limit.setTotalDebitLimit(money(request.totalDebitLimit(), currency));
@@ -75,7 +69,7 @@ public class ConsentsController {
         Instant expiresAt = request.expiresAt() != null
                 ? request.expiresAt()
                 : Instant.now().plus(365, ChronoUnit.DAYS);
-        return new GrantAcceptanceRequest(List.of(linkedAccountId), limit, expiresAt, null, null, null);
+        return GrantAcceptanceRequest.forAccount(limit, expiresAt, null, null, null);
     }
 
     private static Money money(String amount, CurrencyCode currency) {

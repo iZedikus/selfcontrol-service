@@ -2,8 +2,7 @@ package ru.stepanov.selfcontrol.api.mapper;
 
 import ru.stepanov.selfcontrol.api.contract.consent.ConsentResponse;
 import ru.stepanov.selfcontrol.api.contract.consent.ConsentStatus;
-import ru.stepanov.selfcontrol.banking.Acceptance;
-import ru.stepanov.selfcontrol.banking.LinkedAccount;
+import ru.stepanov.selfcontrol.banking.Consent;
 import ru.stepanov.selfcontrol.common.Money;
 
 import java.math.RoundingMode;
@@ -14,25 +13,18 @@ public final class ConsentMapper {
     private ConsentMapper() {
     }
 
-    public static ConsentResponse toResponse(Acceptance acceptance, UUID linkedAccountId) {
+    public static ConsentResponse toResponse(Consent consent) {
         return new ConsentResponse(
-                acceptance.getAcceptanceId(),
-                linkedAccountId,
-                parseUuid(acceptance.getExternalConsentId()),
-                mapStatus(acceptance.getStatus()),
-                moneyString(acceptance.getAcceptanceLimit() == null ? null : acceptance.getAcceptanceLimit().getTotalDebitLimit()),
-                moneyString(acceptance.getAcceptanceLimit() == null ? null : acceptance.getAcceptanceLimit().getMaxSingleDebit()),
-                currencyCode(acceptance.getAcceptanceLimit()),
-                acceptance.getGrantedAt(),
-                acceptance.getExpiresAt()
+                consent.getConsentId(),
+                consent.getLinkedAccountId(),
+                parseUuid(consent.getExternalConsentId()),
+                mapStatus(consent.getStatus()),
+                moneyString(consent.getAcceptanceLimit() == null ? null : consent.getAcceptanceLimit().getTotalDebitLimit()),
+                moneyString(consent.getAcceptanceLimit() == null ? null : consent.getAcceptanceLimit().getMaxSingleDebit()),
+                currencyCode(consent.getAcceptanceLimit()),
+                consent.getGrantedAt(),
+                consent.getExpiresAt()
         );
-    }
-
-    public static UUID linkedAccountIdFor(Acceptance acceptance) {
-        return acceptance.getLinkedAccounts().stream()
-                .findFirst()
-                .map(LinkedAccount::getLinkedAccountId)
-                .orElse(null);
     }
 
     private static ConsentStatus mapStatus(ru.stepanov.selfcontrol.banking.AcceptanceStatus status) {
@@ -65,6 +57,10 @@ public final class ConsentMapper {
         if (value == null || value.isBlank()) {
             return null;
         }
-        return UUID.fromString(value);
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 }

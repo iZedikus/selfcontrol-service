@@ -14,14 +14,20 @@ import java.util.*;
 
 @Service
 public class TokenService {
+    public static final int ACCESS_TOKEN_EXPIRES_IN_SECONDS = 1800;
+
     private final String secret;
 
     public TokenService(@Value("${app.security.jwt-secret:dev-secret-change-me}") String secret) {
         this.secret = secret;
     }
 
+    public int accessTokenExpiresInSeconds() {
+        return ACCESS_TOKEN_EXPIRES_IN_SECONDS;
+    }
+
     public String accessToken(User u) {
-        long exp = Instant.now().plus(Duration.ofMinutes(30)).getEpochSecond();
+        long exp = Instant.now().plusSeconds(ACCESS_TOKEN_EXPIRES_IN_SECONDS).getEpochSecond();
         String payload = u.getUserId() + ":" + u.getRole() + ":" + exp;
         return Base64.getUrlEncoder().withoutPadding().encodeToString(payload.getBytes(StandardCharsets.UTF_8)) + "." + sign(payload);
     }

@@ -2,6 +2,10 @@ package ru.stepanov.selfcontrol.identity;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import ru.stepanov.selfcontrol.api.contract.auth.AuthResponse;
+import ru.stepanov.selfcontrol.api.contract.auth.LoginRequest;
+import ru.stepanov.selfcontrol.api.contract.auth.RefreshRequest;
+import ru.stepanov.selfcontrol.api.contract.auth.RegisterRequest;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -14,22 +18,17 @@ public class AuthController {
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
-    AuthService.AuthResponse register(@RequestBody AuthService.RegisterRequest r) {
-        return service.register(r);
+    AuthResponse register(@RequestBody RegisterRequest request) {
+        return service.register(request);
     }
 
     @PostMapping("/login")
-    AuthService.AuthResponse login(@RequestBody AuthService.LoginRequest r) {
-        return service.login(r);
+    AuthResponse login(@RequestBody LoginRequest request) {
+        return service.login(request);
     }
 
     @PostMapping("/refresh")
-    AuthService.AuthResponse refresh(@RequestBody AuthService.RefreshRequest r) {
-        return service.refresh(r);
-    }
-
-    @PostMapping("/logout")
-    void logout(@RequestBody AuthService.RefreshRequest r) {
-        service.logout(r);
+    AuthResponse refresh(@RequestBody RefreshRequest request) {
+        return service.refresh(request);
     }
 }

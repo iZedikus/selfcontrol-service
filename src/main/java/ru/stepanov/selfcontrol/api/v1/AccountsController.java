@@ -41,7 +41,7 @@ public class AccountsController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     LinkedAccountResponse link(@RequestBody LinkAccountRequest request) {
-        var linked = accountLifecycle.linkAccount(auth.userId(), request.paymentToken());
+        var linked = accountLifecycle.linkAccount(auth.userId(), request);
         return LinkedAccountMapper.toResponse(linked);
     }
 

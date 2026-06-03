@@ -13,4 +13,15 @@ public record GrantAcceptanceRequest(
         List<String> permissions,
         Map<String, Object> simulacrumParams
 ) {
+    public static GrantAcceptanceRequest forAccount(AcceptanceLimit acceptanceLimit,
+                                                     Instant expiresAt,
+                                                     String purpose,
+                                                     List<String> permissions,
+                                                     Map<String, Object> simulacrumParams) {
+        return new GrantAcceptanceRequest(List.of(), acceptanceLimit, expiresAt, purpose, permissions, simulacrumParams);
+    }
+
+    public GrantAcceptanceRequest withoutLinkedAccountIds() {
+        return new GrantAcceptanceRequest(List.of(), acceptanceLimit, expiresAt, purpose, permissions, simulacrumParams);
+    }
 }

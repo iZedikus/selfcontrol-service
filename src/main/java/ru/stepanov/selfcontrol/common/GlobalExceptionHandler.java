@@ -3,6 +3,7 @@ package ru.stepanov.selfcontrol.common;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
@@ -37,6 +38,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     ResponseEntity<ErrorResponse> illegalState(IllegalStateException e) {
         return error(HttpStatus.CONFLICT, ErrorCode.CONFLICT, messageOrDefault(e));
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    ResponseEntity<ErrorResponse> accessDenied(AccessDeniedException e) {
+        return error(HttpStatus.FORBIDDEN, ErrorCode.FORBIDDEN, "Access denied");
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

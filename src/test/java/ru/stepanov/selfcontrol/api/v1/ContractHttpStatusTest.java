@@ -13,14 +13,17 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import ru.stepanov.selfcontrol.banking.*;
 import ru.stepanov.selfcontrol.common.GlobalExceptionHandler;
 import ru.stepanov.selfcontrol.config.JacksonConfig;
+import ru.stepanov.selfcontrol.api.contract.auth.AuthResponse;
 import ru.stepanov.selfcontrol.identity.AuthController;
 import ru.stepanov.selfcontrol.identity.AuthService;
+import ru.stepanov.selfcontrol.security.TokenService;
 import ru.stepanov.selfcontrol.security.AuthenticationFacade;
 
 import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -73,12 +76,12 @@ class ContractHttpStatusTest {
     @Test
     void registerReturns201() throws Exception {
         when(authService.register(any())).thenReturn(
-                new AuthService.AuthResponse("a", "r", UUID.randomUUID(), "User", "Active"));
+                new AuthResponse("a", "r", TokenService.ACCESS_TOKEN_EXPIRES_IN_SECONDS, UUID.randomUUID()));
 
         authMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"email":"u@test.local","password":"password1","phoneNumber":"+79001234567"}
+                                {"email":"u@test.local","password":"password1","firstName":"Ivan","lastName":"Ivanov","phoneNumber":"+79001234567"}
                                 """))
                 .andExpect(status().isCreated());
     }
@@ -89,7 +92,7 @@ class ContractHttpStatusTest {
         when(auth.userId()).thenReturn(userId);
         LinkedAccount linked = new LinkedAccount();
         linked.setLinkedAccountId(UUID.randomUUID());
-        when(accountLifecycle.linkAccount(userId, "token-1")).thenReturn(linked);
+        when(accountLifecycle.linkAccount(eq(userId), any())).thenReturn(linked);
 
         accountsMvc.perform(post("/api/v1/accounts")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -121,12 +124,12 @@ class ContractHttpStatusTest {
         account.setUserId(userId);
         when(accounts.findById(linkedAccountId)).thenReturn(java.util.Optional.of(account));
 
-        Acceptance acceptance = new Acceptance();
-        acceptance.setAcceptanceId(UUID.randomUUID());
-        acceptance.setExternalConsentId(UUID.randomUUID().toString());
-        acceptance.setStatus(AcceptanceStatus.Active);
-        acceptance.getLinkedAccounts().add(account);
-        when(acceptanceService.grant(any(), any())).thenReturn(acceptance);
+        Consent consent = new Consent();
+        consent.setConsentId(UUID.randomUUID());
+        consent.setLinkedAccountId(linkedAccountId);
+        consent.setExternalConsentId(UUID.randomUUID().toString());
+        consent.setStatus(AcceptanceStatus.Active);
+        when(acceptanceService.grant(eq(userId), eq(linkedAccountId), any())).thenReturn(consent);
 
         consentsMvc.perform(post("/api/v1/accounts/{id}/consent", linkedAccountId)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -140,19 +143,15 @@ class ContractHttpStatusTest {
     void revokeConsentReturns204() throws Exception {
         UUID userId = UUID.randomUUID();
         UUID linkedAccountId = UUID.randomUUID();
-        UUID acceptanceId = UUID.randomUUID();
         when(auth.userId()).thenReturn(userId);
         LinkedAccount account = new LinkedAccount();
         account.setLinkedAccountId(linkedAccountId);
         account.setUserId(userId);
-        Acceptance acceptance = new Acceptance();
-        acceptance.setAcceptanceId(acceptanceId);
-        account.setAcceptance(acceptance);
         when(accounts.findById(linkedAccountId)).thenReturn(java.util.Optional.of(account));
 
         consentsMvc.perform(delete("/api/v1/accounts/{id}/consent", linkedAccountId))
                 .andExpect(status().isNoContent());
 
-        verify(acceptanceService).revoke(userId, acceptanceId);
+        verify(acceptanceService).revokeByLinkedAccountId(userId, linkedAccountId);
     }
 }

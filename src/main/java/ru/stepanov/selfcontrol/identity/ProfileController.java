@@ -1,6 +1,8 @@
 package ru.stepanov.selfcontrol.identity;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import ru.stepanov.selfcontrol.api.contract.auth.RefreshRequest;
 import ru.stepanov.selfcontrol.security.AuthenticationFacade;
 
 import java.time.Instant;
@@ -10,10 +12,12 @@ import java.util.UUID;
 @RequestMapping("/api/v1/profile")
 public class ProfileController {
     private final ProfileService profiles;
+    private final AuthService authService;
     private final AuthenticationFacade auth;
 
-    public ProfileController(ProfileService profiles, AuthenticationFacade auth) {
+    public ProfileController(ProfileService profiles, AuthService authService, AuthenticationFacade auth) {
         this.profiles = profiles;
+        this.authService = authService;
         this.auth = auth;
     }
 
@@ -30,6 +34,12 @@ public class ProfileController {
     @DeleteMapping
     void delete() {
         profiles.delete(auth.userId());
+    }
+
+    @PostMapping("/logout")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void logout(@RequestBody RefreshRequest request) {
+        authService.logout(request);
     }
 
     public record UpdateProfileRequest(String phoneNumber, String firstName, String middleName, String lastName,

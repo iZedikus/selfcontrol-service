@@ -7,35 +7,66 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.common.Money;
+import ru.stepanov.selfcontrol.rabbit.ProfileSyncAction;
+import ru.stepanov.selfcontrol.rabbit.ProfileSyncPublisher;
+import ru.stepanov.selfcontrol.scenario.ScenarioProfileSyncSupport;
+import ru.stepanov.selfcontrol.scenario.UserScenario;
+import ru.stepanov.selfcontrol.scenario.UserScenarioRepository;
+import ru.stepanov.selfcontrol.undesirable.UndesirablePurchaseConfigRepository;
+import ru.stepanov.selfcontrol.undesirable.UndesirablePurchasePlugin;
+import ru.stepanov.selfcontrol.simulacrum.RegisterConsentRequest;
 import ru.stepanov.selfcontrol.simulacrum.SimulacrumClient;
 
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Service
 public class AcceptanceService {
-    private final AcceptanceRepository acceptances;
+
+    private final ConsentRepository consents;
     private final LinkedAccountRepository accounts;
+    private final UserScenarioRepository userScenarios;
+    private final UndesirablePurchaseConfigRepository scenarioConfigs;
     private final SimulacrumClient simulacrum;
+    private final ProfileSyncPublisher profileSyncPublisher;
+    private final UndesirablePurchasePlugin undesirablePurchasePlugin;
     private final AuditService audit;
 
-    public AcceptanceService(AcceptanceRepository acceptances, LinkedAccountRepository accounts, SimulacrumClient simulacrum, AuditService audit) {
-        this.acceptances = acceptances;
+    public AcceptanceService(ConsentRepository consents,
+                             LinkedAccountRepository accounts,
+                             UserScenarioRepository userScenarios,
+                             UndesirablePurchaseConfigRepository scenarioConfigs,
+                             SimulacrumClient simulacrum,
+                             ProfileSyncPublisher profileSyncPublisher,
+                             UndesirablePurchasePlugin undesirablePurchasePlugin,
+                             AuditService audit) {
+        this.consents = consents;
         this.accounts = accounts;
+        this.userScenarios = userScenarios;
+        this.scenarioConfigs = scenarioConfigs;
         this.simulacrum = simulacrum;
+        this.profileSyncPublisher = profileSyncPublisher;
+        this.undesirablePurchasePlugin = undesirablePurchasePlugin;
         this.audit = audit;
     }
 
+    /**
+     * Выдать consent для одного привязанного счёта (REST: POST /accounts/{linkedAccountId}/consent).
+     */
     @Transactional
-    public Acceptance grant(UUID userId, GrantAcceptanceRequest request) {
+    public Consent grant(UUID userId, UUID linkedAccountId, GrantAcceptanceRequest request) {
         validateGrantRequest(request);
-        List<LinkedAccount> linkedAccounts = loadActiveUserAccounts(userId, request.linkedAccountIds());
-        SimulacrumClient.GrantConsentResponse simulacrumResponse = simulacrum.grantConsent(userId, buildGrantConsentBody(userId, request, linkedAccounts));
+        LinkedAccount account = loadActiveUserAccount(userId, linkedAccountId);
+        if (consents.existsByLinkedAccountIdAndStatus(linkedAccountId, AcceptanceStatus.Active)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Active consent already exists for account: " + linkedAccountId);
+        }
+
+        SimulacrumClient.GrantConsentResponse simulacrumResponse = simulacrum.grantConsent(
+                userId, buildRegisterConsent(account, request));
         JsonNode response = simulacrumResponse.raw();
         String externalConsentId = simulacrumResponse.consentId();
         if (externalConsentId == null) {
@@ -43,119 +74,153 @@ public class AcceptanceService {
         }
 
         Instant now = Instant.now();
-        Acceptance acceptance = new Acceptance();
-        acceptance.setUserId(userId);
-        acceptance.setExternalConsentId(externalConsentId);
-        acceptance.setStatus(parseStatus(firstText(response, "status", "state"), AcceptanceStatus.Active));
-        acceptance.setGrantedAt(firstInstant(response, now, "grantedAt", "issuedAt", "createdAt"));
-        acceptance.setExpiresAt(firstInstant(response, request.expiresAt(), "expiresAt", "validUntil", "expirationDate"));
-        acceptance.setAcceptanceLimit(request.acceptanceLimit());
-        Acceptance saved = acceptances.save(acceptance);
+        Consent consent = consents.findByLinkedAccountId(linkedAccountId).orElseGet(Consent::new);
+        consent.setUserId(userId);
+        consent.setLinkedAccountId(linkedAccountId);
+        consent.setExternalConsentId(externalConsentId);
+        consent.setStatus(parseStatus(firstText(response, "status", "state"), AcceptanceStatus.Active));
+        consent.setGrantedAt(firstInstant(response, now, "grantedAt", "issuedAt", "createdAt"));
+        consent.setExpiresAt(firstInstant(response, request.expiresAt(), "expiresAt", "validUntil", "expirationDate"));
+        consent.setAcceptanceLimit(request.acceptanceLimit());
+        Consent saved = consents.save(consent);
 
-        linkedAccounts.forEach(account -> account.setAcceptance(saved));
-        accounts.saveAll(linkedAccounts);
-        audit.record(userId, userId, "ACCEPTANCE_GRANTED", "ACCEPTANCE", saved.getAcceptanceId(), Map.of(
-                "linkedAccountIds", request.linkedAccountIds(),
+        audit.record(userId, userId, "CONSENT_GRANTED", "CONSENT", saved.getConsentId(), Map.of(
+                "linkedAccountId", linkedAccountId,
                 "externalConsentId", saved.getExternalConsentId(),
                 "status", saved.getStatus().name()
         ));
         return saved;
     }
 
+    /** Legacy: grant для списка счетов — только первый счёт (один consent на счёт). */
     @Transactional
-    public Acceptance revoke(UUID userId, UUID acceptanceId) {
-        Acceptance acceptance = acceptances.findById(acceptanceId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Acceptance not found"));
-        if (!userId.equals(acceptance.getUserId())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Acceptance belongs to another user");
+    public Consent grant(UUID userId, GrantAcceptanceRequest request) {
+        if (request.linkedAccountIds() == null || request.linkedAccountIds().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "linkedAccountIds is required");
         }
-        if (acceptance.getStatus() != AcceptanceStatus.Active) {
-            return acceptance;
+        return grant(userId, request.linkedAccountIds().getFirst(), request.withoutLinkedAccountIds());
+    }
+
+    /**
+     * Отозвать consent по привязанному счёту (REST: DELETE /accounts/{linkedAccountId}/consent).
+     */
+    @Transactional
+    public void revokeByLinkedAccountId(UUID userId, UUID linkedAccountId) {
+        Consent consent = consents.findByLinkedAccountId(linkedAccountId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Consent not found for account: " + linkedAccountId));
+        revokeInternal(userId, consent);
+    }
+
+    /** Legacy: отзыв по consentId. */
+    @Transactional
+    public Consent revoke(UUID userId, UUID consentId) {
+        Consent consent = consents.findById(consentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Consent not found"));
+        revokeInternal(userId, consent);
+        return consent;
+    }
+
+    public List<Consent> findUserConsents(UUID userId) {
+        return consents.findByUserId(userId);
+    }
+
+    public Consent requireActiveConsentForAccount(UUID linkedAccountId) {
+        return consents.findByLinkedAccountId(linkedAccountId)
+                .filter(c -> c.getStatus() == AcceptanceStatus.Active)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Active consent not found for account: " + linkedAccountId));
+    }
+
+    private void revokeInternal(UUID userId, Consent consent) {
+        if (!userId.equals(consent.getUserId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Consent belongs to another user");
         }
-        simulacrum.revokeConsent(userId, acceptance.getExternalConsentId());
-        acceptance.setStatus(AcceptanceStatus.Revoked);
-        acceptance.setRevokedAt(Instant.now());
-        Acceptance saved = acceptances.save(acceptance);
-        audit.record(userId, userId, "ACCEPTANCE_REVOKED", "ACCEPTANCE", saved.getAcceptanceId(), Map.of(
+        if (consent.getStatus() != AcceptanceStatus.Active) {
+            return;
+        }
+        simulacrum.revokeConsent(userId, consent.getExternalConsentId());
+        consent.setStatus(AcceptanceStatus.Revoked);
+        consent.setRevokedAt(Instant.now());
+        Consent saved = consents.save(consent);
+
+        publishTerminateForActiveScenarios(consent.getLinkedAccountId());
+
+        audit.record(userId, userId, "CONSENT_REVOKED", "CONSENT", saved.getConsentId(), Map.of(
+                "linkedAccountId", saved.getLinkedAccountId(),
                 "externalConsentId", saved.getExternalConsentId(),
                 "status", saved.getStatus().name()
         ));
-        return saved;
     }
 
-    public List<Acceptance> findUserAcceptances(UUID userId) {
-        return acceptances.findByUserId(userId);
+    private void publishTerminateForActiveScenarios(UUID linkedAccountId) {
+        List<UserScenario> activeScenarios = userScenarios.findByActiveTrueAndDebitConfig_SourceAccountId(linkedAccountId);
+        for (UserScenario scenario : activeScenarios) {
+            scenarioConfigs.findByUserScenarioId(scenario.getUserScenarioId()).ifPresent(config ->
+                    ScenarioProfileSyncSupport.publish(
+                            profileSyncPublisher,
+                            undesirablePurchasePlugin,
+                            accounts,
+                            scenario,
+                            config,
+                            ProfileSyncAction.TERMINATE
+                    ));
+        }
     }
 
     private void validateGrantRequest(GrantAcceptanceRequest request) {
         if (request == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Acceptance request is required");
-        }
-        if (request.linkedAccountIds() == null || request.linkedAccountIds().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "linkedAccountIds is required");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Consent request is required");
         }
         if (request.expiresAt() == null || !request.expiresAt().isAfter(Instant.now())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "expiresAt must be in the future");
         }
     }
 
-    private List<LinkedAccount> loadActiveUserAccounts(UUID userId, List<UUID> linkedAccountIds) {
-        List<LinkedAccount> linkedAccounts = accounts.findAllById(linkedAccountIds);
-        Map<UUID, LinkedAccount> byId = linkedAccounts.stream()
-                .collect(Collectors.toMap(LinkedAccount::getLinkedAccountId, Function.identity()));
-        for (UUID linkedAccountId : linkedAccountIds) {
-            LinkedAccount account = byId.get(linkedAccountId);
-            if (account == null) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Linked account not found: " + linkedAccountId);
-            }
-            if (!userId.equals(account.getUserId())) {
-                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Linked account belongs to another user: " + linkedAccountId);
-            }
-            if (account.getStatus() != LinkedAccountStatus.Active) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Linked account is not active: " + linkedAccountId);
-            }
+    private LinkedAccount loadActiveUserAccount(UUID userId, UUID linkedAccountId) {
+        LinkedAccount account = accounts.findById(linkedAccountId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Linked account not found: " + linkedAccountId));
+        if (!userId.equals(account.getUserId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Linked account belongs to another user: " + linkedAccountId);
         }
-        return linkedAccountIds.stream().map(byId::get).toList();
+        if (account.getStatus() != LinkedAccountStatus.Active) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Linked account is not active: " + linkedAccountId);
+        }
+        return account;
     }
 
-    private SimulacrumClient.GrantConsentRequest buildGrantConsentBody(UUID userId, GrantAcceptanceRequest request, List<LinkedAccount> linkedAccounts) {
-        return new SimulacrumClient.GrantConsentRequest(
-                userId,
-                request.linkedAccountIds(),
-                linkedAccounts.stream().map(this::accountBody).toList(),
-                limitsBody(request.acceptanceLimit()),
-                request.expiresAt(),
+    private RegisterConsentRequest buildRegisterConsent(LinkedAccount account, GrantAcceptanceRequest request) {
+        AcceptanceLimit limit = request.acceptanceLimit();
+        if (limit == null || limit.getTotalDebitLimit() == null || limit.getTotalDebitLimit().getCurrency() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "acceptanceLimit with totalDebitLimit is required");
+        }
+        String currency = limit.getTotalDebitLimit().getCurrency().name();
+        return new RegisterConsentRequest(
+                resolveSimulacrumAccountId(account),
+                moneyString(limit.getTotalDebitLimit()),
+                limit.getMaxSingleDebit() != null ? moneyString(limit.getMaxSingleDebit()) : null,
+                currency,
                 request.purpose(),
-                request.permissions() == null ? List.of() : request.permissions(),
-                request.simulacrumParams() == null || request.simulacrumParams().isEmpty() ? null : request.simulacrumParams()
+                simulacrum.getCreditorSystemId(),
+                request.expiresAt()
         );
     }
 
-    private SimulacrumClient.ConsentAccount accountBody(LinkedAccount account) {
-        return new SimulacrumClient.ConsentAccount(
-                account.getLinkedAccountId().toString(),
-                account.getExternalAccountId(),
-                account.getDisplayName(),
-                account.getMaskedPAN(),
-                account.getCurrency() == null ? null : account.getCurrency().name(),
-                account.getPaymentToken() == null ? null : account.getPaymentToken().getValue(),
-                account.getBankBIC() == null ? null : account.getBankBIC().getValue(),
-                account.getBankName()
-        );
-    }
-
-    private SimulacrumClient.AcceptanceLimits limitsBody(AcceptanceLimit limit) {
-        if (limit == null) {
-            return new SimulacrumClient.AcceptanceLimits(null, null);
+    private String resolveSimulacrumAccountId(LinkedAccount account) {
+        if (account.getExternalAccountId() != null && !account.getExternalAccountId().isBlank()) {
+            return account.getExternalAccountId();
         }
-        return new SimulacrumClient.AcceptanceLimits(moneyBody(limit.getTotalDebitLimit()), moneyBody(limit.getMaxSingleDebit()));
+        if (account.getPaymentToken() != null && account.getPaymentToken().getValue() != null
+                && !account.getPaymentToken().getValue().isBlank()) {
+            return account.getPaymentToken().getValue();
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Linked account has no Simulacrum accountId");
     }
 
-    private SimulacrumClient.MoneyDto moneyBody(Money money) {
-        if (money == null) {
+    private static String moneyString(Money money) {
+        if (money == null || money.getAmount() == null) {
             return null;
         }
-        return new SimulacrumClient.MoneyDto(money.getAmount(), money.getCurrency() == null ? null : money.getCurrency().name());
+        return money.getAmount().setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 
     private String firstText(JsonNode root, String... names) {

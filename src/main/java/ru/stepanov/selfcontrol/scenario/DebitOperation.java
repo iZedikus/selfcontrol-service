@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import ru.stepanov.selfcontrol.common.Money;
 
 import java.time.Instant;
-import java.util.*;
+import java.util.UUID;
 
 @Entity
 @Table(name = "debit_operations")
@@ -18,20 +18,29 @@ public class DebitOperation {
     @Column(name = "external_transaction_id")
     private String externalTransactionID;
     @Embedded
-    @AttributeOverrides({@AttributeOverride(name = "amount", column = @Column(name = "amount", precision = 19, scale = 2)), @AttributeOverride(name = "currency", column = @Column(name = "currency"))})
+    @AttributeOverrides({
+            @AttributeOverride(name = "amount", column = @Column(name = "amount", precision = 19, scale = 2)),
+            @AttributeOverride(name = "currency", column = @Column(name = "currency"))
+    })
     private Money amount;
     private Instant initiatedAt;
     private Instant completedAt;
     @Enumerated(EnumType.STRING)
-    private ExecutionStatus status;
+    private DebitOperationStatus status;
     @Embedded
     private Failure failure;
 
     @PrePersist
     void pre() {
-        if (debitOperationId == null) debitOperationId = UUID.randomUUID();
-        if (initiatedAt == null) initiatedAt = Instant.now();
-        if (status == null) status = ExecutionStatus.DebitInitiated;
+        if (debitOperationId == null) {
+            debitOperationId = UUID.randomUUID();
+        }
+        if (initiatedAt == null) {
+            initiatedAt = Instant.now();
+        }
+        if (status == null) {
+            status = DebitOperationStatus.Pending;
+        }
     }
 
     public UUID getDebitOperationId() {
@@ -82,11 +91,11 @@ public class DebitOperation {
         this.completedAt = completedAt;
     }
 
-    public ExecutionStatus getStatus() {
+    public DebitOperationStatus getStatus() {
         return status;
     }
 
-    public void setStatus(ExecutionStatus status) {
+    public void setStatus(DebitOperationStatus status) {
         this.status = status;
     }
 

@@ -12,4 +12,8 @@ public interface UserScenarioRepository extends JpaRepository<UserScenario, UUID
     boolean existsByTemplateScenarioId(UUID scenarioId);
 
     boolean existsByTemplateScenarioIdAndActiveTrue(UUID scenarioId);
+
+    List<UserScenario> findByActiveTrueAndDebitConfig_SourceAccountId(UUID sourceAccountId);
+
+    boolean existsByActiveTrueAndDebitConfig_SourceAccountId(UUID sourceAccountId);
 }

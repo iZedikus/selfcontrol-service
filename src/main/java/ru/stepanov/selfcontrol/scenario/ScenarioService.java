@@ -1,15 +1,19 @@
 package ru.stepanov.selfcontrol.scenario;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+import ru.stepanov.selfcontrol.api.contract.scenario.ActivateScenarioRequest;
+import ru.stepanov.selfcontrol.api.contract.scenario.UpdateScenarioRequest;
 import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.banking.*;
 import ru.stepanov.selfcontrol.common.*;
 import ru.stepanov.selfcontrol.rabbit.*;
 import ru.stepanov.selfcontrol.undesirable.*;
 
-import java.math.*;
-import java.time.*;
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.*;
 
 @Service
@@ -18,15 +22,24 @@ public class ScenarioService {
     private final UserScenarioRepository scenarios;
     private final UndesirablePurchaseConfigRepository configs;
     private final LinkedAccountRepository accounts;
+    private final AcceptanceService acceptanceService;
     private final ProfileSyncPublisher publisher;
     private final UndesirablePurchasePlugin plugin;
     private final AuditService audit;
 
-    public ScenarioService(ScenarioTemplateRepository templates, UserScenarioRepository scenarios, UndesirablePurchaseConfigRepository configs, LinkedAccountRepository accounts, ProfileSyncPublisher publisher, UndesirablePurchasePlugin plugin, AuditService audit) {
+    public ScenarioService(ScenarioTemplateRepository templates,
+                           UserScenarioRepository scenarios,
+                           UndesirablePurchaseConfigRepository configs,
+                           LinkedAccountRepository accounts,
+                           AcceptanceService acceptanceService,
+                           ProfileSyncPublisher publisher,
+                           UndesirablePurchasePlugin plugin,
+                           AuditService audit) {
         this.templates = templates;
         this.scenarios = scenarios;
         this.configs = configs;
         this.accounts = accounts;
+        this.acceptanceService = acceptanceService;
         this.publisher = publisher;
         this.plugin = plugin;
         this.audit = audit;
@@ -41,42 +54,77 @@ public class ScenarioService {
     }
 
     @Transactional
-    public UserScenario activate(UUID userId, ActivateScenarioRequest r) {
-        ScenarioTemplate t = templates.findById(r.templateId()).orElseThrow();
-        UserScenario us = new UserScenario();
-        us.setUserId(userId);
-        us.setTemplate(t);
-        us.setActive(true);
-        us.setActivatedAt(Instant.now());
-        DebitConfig dc = toDebitConfig(r.debitConfig());
-        us.setDebitConfig(dc);
-        OracleSubscriptionRef os = new OracleSubscriptionRef();
-        os.setStatus(OracleSubscriptionStatus.Active);
-        os.setLastSyncedAt(Instant.now());
-        us.setOracleSubscriptionRef(os);
-        scenarios.save(us);
-        UndesirablePurchaseConfig cfg = saveConfig(us.getUserScenarioId(), r.undesirableConfig(), 1);
-        publish(us, cfg, ProfileSyncAction.REGISTER);
-        audit.record(userId, userId, "USER_SCENARIO_ACTIVATED", "USER_SCENARIO", us.getUserScenarioId(), Map.of(
-                "templateId", t.getScenarioId(),
-                "scenarioTypeCode", t.getScenarioTypeCode()
+    public UserScenario activate(UUID userId, ActivateScenarioRequest request) {
+        ScenarioTemplate template = templates.findById(request.templateId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Scenario template not found"));
+        LinkedAccount account = accounts.findById(request.linkedAccountId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Linked account not found"));
+        if (!userId.equals(account.getUserId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Linked account belongs to another user");
+        }
+        Consent consent = acceptanceService.requireActiveConsentForAccount(request.linkedAccountId());
+
+        UserScenario scenario = new UserScenario();
+        scenario.setUserId(userId);
+        scenario.setTemplate(template);
+        scenario.setActive(true);
+        scenario.setActivatedAt(Instant.now());
+        scenario.setDebitConfig(toDebitConfig(request, consent.getConsentId()));
+        OracleSubscriptionRef subscription = new OracleSubscriptionRef();
+        subscription.setStatus(OracleSubscriptionStatus.Active);
+        subscription.setLastSyncedAt(Instant.now());
+        scenario.setOracleSubscriptionRef(subscription);
+        scenarios.save(scenario);
+
+        UndesirablePurchaseConfig config = saveConfig(scenario.getUserScenarioId(), parseScenarioConfig(request.scenarioConfig()), 1);
+        publish(scenario, config, ProfileSyncAction.REGISTER);
+        audit.record(userId, userId, "USER_SCENARIO_ACTIVATED", "USER_SCENARIO", scenario.getUserScenarioId(), Map.of(
+                "templateId", template.getScenarioId(),
+                "scenarioTypeCode", template.getScenarioTypeCode()
         ));
-        return us;
+        return scenario;
     }
 
     @Transactional
-    public UserScenario update(UUID userId, UUID id, UpdateScenarioRequest r) {
-        UserScenario us = scenarios.findById(id).orElseThrow();
-        if (!us.getUserId().equals(userId)) throw new IllegalArgumentException("Forbidden scenario");
-        if (r.debitConfig() != null) us.setDebitConfig(toDebitConfig(r.debitConfig()));
-        UndesirablePurchaseConfig old = configs.findByUserScenarioId(id).orElseThrow();
-        UndesirablePurchaseConfig cfg = saveConfig(id, r.undesirableConfig(), old.getVersion() + 1);
-        publish(us, cfg, ProfileSyncAction.UPDATE_RULES);
-        audit.record(userId, userId, "USER_SCENARIO_UPDATED", "USER_SCENARIO", us.getUserScenarioId(), Map.of(
-                "configVersion", cfg.getVersion(),
-                "debitConfigChanged", r.debitConfig() != null
-        ));
-        return us;
+    public UserScenario update(UUID userId, UUID userScenarioId, UpdateScenarioRequest request) {
+        UserScenario scenario = scenarios.findById(userScenarioId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Scenario not found"));
+        if (!scenario.getUserId().equals(userId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Forbidden scenario");
+        }
+
+        boolean debitChanged = false;
+        if (request.debitAmount() != null || request.recipientPaymentToken() != null) {
+            DebitConfig current = scenario.getDebitConfig();
+            Money amount = request.debitAmount() != null
+                    ? new Money(new BigDecimal(request.debitAmount()), current.getDebitAmount().getCurrency())
+                    : current.getDebitAmount();
+            PaymentToken recipient = request.recipientPaymentToken() != null
+                    ? new PaymentToken(request.recipientPaymentToken())
+                    : current.getRecipientPaymentToken();
+            DebitConfig updated = new DebitConfig();
+            updated.setDebitAmount(amount);
+            updated.setRecipientPaymentToken(recipient);
+            updated.setAcceptanceId(current.getAcceptanceId());
+            updated.setSourceAccountId(current.getSourceAccountId());
+            scenario.setDebitConfig(updated);
+            debitChanged = true;
+        }
+
+        UndesirablePurchaseConfig config = configs.findByUserScenarioId(userScenarioId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Scenario config not found"));
+        if (request.scenarioConfig() != null) {
+            config = saveConfig(userScenarioId, parseScenarioConfig(request.scenarioConfig()), config.getVersion() + 1);
+        }
+
+        if (debitChanged || request.scenarioConfig() != null) {
+            publish(scenario, config, ProfileSyncAction.UPDATE_RULES);
+            audit.record(userId, userId, "USER_SCENARIO_UPDATED", "USER_SCENARIO", scenario.getUserScenarioId(), Map.of(
+                    "configVersion", config.getVersion(),
+                    "debitConfigChanged", debitChanged
+            ));
+        }
+        return scenario;
     }
 
     @Transactional
@@ -86,67 +134,109 @@ public class ScenarioService {
 
     @Transactional
     public void deactivate(UUID userId, UUID id, boolean terminate, UUID actorUserId) {
-        UserScenario us = scenarios.findById(id).orElseThrow();
-        if (userId != null && !us.getUserId().equals(userId)) throw new IllegalArgumentException("Forbidden scenario");
-        us.setActive(false);
-        us.setDeactivatedAt(Instant.now());
-        if (us.getOracleSubscriptionRef() != null)
-            us.getOracleSubscriptionRef().setStatus(terminate ? OracleSubscriptionStatus.Terminated : OracleSubscriptionStatus.Paused);
-        configs.findByUserScenarioId(id).ifPresent(c -> publish(us, c, terminate ? ProfileSyncAction.TERMINATE : ProfileSyncAction.PAUSE));
+        UserScenario scenario = scenarios.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Scenario not found"));
+        if (userId != null && !scenario.getUserId().equals(userId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Forbidden scenario");
+        }
+        scenario.setActive(false);
+        scenario.setDeactivatedAt(Instant.now());
+        if (scenario.getOracleSubscriptionRef() != null) {
+            scenario.getOracleSubscriptionRef().setStatus(terminate ? OracleSubscriptionStatus.Terminated : OracleSubscriptionStatus.Paused);
+        }
+        configs.findByUserScenarioId(id).ifPresent(config ->
+                publish(scenario, config, terminate ? ProfileSyncAction.TERMINATE : ProfileSyncAction.PAUSE));
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("terminate", terminate);
-        payload.put("oracleStatus", us.getOracleSubscriptionRef() == null ? null : us.getOracleSubscriptionRef().getStatus().name());
-        audit.record(actorUserId, us.getUserId(), userId == null ? "USER_SCENARIO_FORCE_DEACTIVATED" : "USER_SCENARIO_DEACTIVATED", "USER_SCENARIO", us.getUserScenarioId(), payload);
+        payload.put("oracleStatus", scenario.getOracleSubscriptionRef() == null ? null : scenario.getOracleSubscriptionRef().getStatus().name());
+        audit.record(actorUserId, scenario.getUserId(), userId == null ? "USER_SCENARIO_FORCE_DEACTIVATED" : "USER_SCENARIO_DEACTIVATED", "USER_SCENARIO", scenario.getUserScenarioId(), payload);
     }
 
-    private DebitConfig toDebitConfig(DebitConfigDto d) {
-        DebitConfig dc = new DebitConfig();
-        dc.setDebitAmount(new Money(new BigDecimal(d.debitAmount()), CurrencyCode.valueOf(d.currency())));
-        dc.setRecipientPaymentToken(new PaymentToken(d.recipientPaymentToken()));
-        dc.setAcceptanceId(d.consentId());
-        dc.setSourceAccountId(d.sourceAccountId());
-        return dc;
+    private DebitConfig toDebitConfig(ActivateScenarioRequest request, UUID consentId) {
+        DebitConfig debitConfig = new DebitConfig();
+        debitConfig.setDebitAmount(new Money(new BigDecimal(request.debitAmount()), CurrencyCode.valueOf(request.currency())));
+        debitConfig.setRecipientPaymentToken(new PaymentToken(request.recipientPaymentToken()));
+        debitConfig.setAcceptanceId(consentId);
+        debitConfig.setSourceAccountId(request.linkedAccountId());
+        return debitConfig;
+    }
+
+    private UndesirableConfigDto parseScenarioConfig(Map<String, Object> config) {
+        if (config == null) {
+            config = Map.of();
+        }
+        List<String> mccs = readStringList(config.get("mccCodes"));
+        List<MerchantRuleDto> merchantRules = readMerchantRules(config.get("merchantRules"));
+        String matchMode = config.get("matchMode") == null ? null : config.get("matchMode").toString();
+        return new UndesirableConfigDto(mccs, merchantRules, matchMode);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> readStringList(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream().map(Object::toString).toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<MerchantRuleDto> readMerchantRules(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<MerchantRuleDto> rules = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> map) {
+                rules.add(new MerchantRuleDto(
+                        stringValue(map.get("field")),
+                        stringValue(map.get("operator")),
+                        stringValue(map.get("value"))
+                ));
+            }
+        }
+        return rules;
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? null : value.toString();
     }
 
     private UndesirablePurchaseConfig saveConfig(UUID userScenarioId, UndesirableConfigDto dto, int version) {
-        UndesirablePurchaseConfig cfg = configs.findByUserScenarioId(userScenarioId).orElseGet(UndesirablePurchaseConfig::new);
-        cfg.setUserScenarioId(userScenarioId);
-        cfg.setVersion(version);
-        cfg.setMatchMode(dto.matchMode() == null ? MatchMode.ANY : MatchMode.valueOf(dto.matchMode()));
-        cfg.getMccs().clear();
-        for (String m : dto.mccs()) cfg.getMccs().add(new MCC(m));
-        cfg.getMerchantRules().clear();
-        for (MerchantRuleDto rd : dto.merchantRules()) {
-            MerchantRule mr = new MerchantRule();
-            mr.setConfig(cfg);
-            mr.setField(MerchantRuleField.valueOf(rd.field()));
-            mr.setOperator(MerchantRuleOperator.valueOf(rd.operator()));
-            mr.setValue(rd.value());
-            cfg.getMerchantRules().add(mr);
+        UndesirablePurchaseConfig config = configs.findByUserScenarioId(userScenarioId).orElseGet(UndesirablePurchaseConfig::new);
+        config.setUserScenarioId(userScenarioId);
+        config.setVersion(version);
+        config.setMatchMode(dto.matchMode() == null ? MatchMode.ANY : MatchMode.valueOf(dto.matchMode()));
+        config.getMccs().clear();
+        for (String mcc : dto.mccs()) {
+            config.getMccs().add(new MCC(mcc));
         }
-        return configs.save(cfg);
+        config.getMerchantRules().clear();
+        for (MerchantRuleDto ruleDto : dto.merchantRules()) {
+            MerchantRule rule = new MerchantRule();
+            rule.setConfig(config);
+            rule.setField(MerchantRuleField.valueOf(ruleDto.field()));
+            rule.setOperator(MerchantRuleOperator.valueOf(ruleDto.operator()));
+            rule.setValue(ruleDto.value());
+            config.getMerchantRules().add(rule);
+        }
+        return configs.save(config);
     }
 
-    private void publish(UserScenario us, UndesirablePurchaseConfig cfg, ProfileSyncAction action) {
-        LinkedAccount account = accounts.findById(us.getDebitConfig().getSourceAccountId()).orElse(null);
-        DebitConfigDto d = new DebitConfigDto(us.getDebitConfig().getDebitAmount().getAmount().setScale(2).toPlainString(), us.getDebitConfig().getDebitAmount().getCurrency().name(), us.getDebitConfig().getRecipientPaymentToken().getValue(), us.getDebitConfig().getAcceptanceId(), us.getDebitConfig().getSourceAccountId());
-        publisher.publish(new ProfileSyncMessage(UUID.randomUUID(), Instant.now(), action, us.getUserId(), us.getUserScenarioId(), UndesirablePurchasePlugin.SCENARIO_TYPE_CODE, account == null ? null : account.getPaymentToken().getValue(), account == null ? null : account.getBankBIC().getValue(), cfg.getVersion(), plugin.buildOracleRules(cfg), d));
+    private void publish(UserScenario scenario, UndesirablePurchaseConfig config, ProfileSyncAction action) {
+        ScenarioProfileSyncSupport.publish(publisher, plugin, accounts, scenario, config, action);
     }
 
-    public record ActivateScenarioRequest(UUID templateId, DebitConfigDto debitConfig,
-                                          UndesirableConfigDto undesirableConfig) {
-    }
-
-    public record UpdateScenarioRequest(DebitConfigDto debitConfig, UndesirableConfigDto undesirableConfig) {
-    }
-
-    public record UndesirableConfigDto(List<String> mccs, List<MerchantRuleDto> merchantRules, String matchMode) {
-        public UndesirableConfigDto {
-            if (mccs == null) mccs = List.of();
-            if (merchantRules == null) merchantRules = List.of();
+    private record UndesirableConfigDto(List<String> mccs, List<MerchantRuleDto> merchantRules, String matchMode) {
+        UndesirableConfigDto {
+            if (mccs == null) {
+                mccs = List.of();
+            }
+            if (merchantRules == null) {
+                merchantRules = List.of();
+            }
         }
     }
 
-    public record MerchantRuleDto(String field, String operator, String value) {
+    private record MerchantRuleDto(String field, String operator, String value) {
     }
 }
