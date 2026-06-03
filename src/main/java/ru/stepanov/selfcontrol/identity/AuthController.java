@@ -1,5 +1,6 @@
 package ru.stepanov.selfcontrol.identity;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -12,6 +13,7 @@ public class AuthController {
     }
 
     @PostMapping("/register")
+    @ResponseStatus(HttpStatus.CREATED)
     AuthService.AuthResponse register(@RequestBody AuthService.RegisterRequest r) {
         return service.register(r);
     }

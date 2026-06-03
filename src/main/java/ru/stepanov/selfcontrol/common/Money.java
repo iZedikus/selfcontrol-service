@@ -1,10 +1,12 @@
 package ru.stepanov.selfcontrol.common;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import jakarta.persistence.*;
 
 import java.math.BigDecimal;
 
 @Embeddable
+@JsonSerialize(using = MoneyJsonSerializer.class)
 public class Money {
     @Column(precision = 19, scale = 2)
     private BigDecimal amount;

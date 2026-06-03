@@ -1,13 +1,27 @@
 package ru.stepanov.selfcontrol.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.module.SimpleModule;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+import ru.stepanov.selfcontrol.common.Money;
+import ru.stepanov.selfcontrol.common.MoneyJsonSerializer;
 
 @Configuration
 public class JacksonConfig {
+
     @Bean
+    @Primary
     public ObjectMapper objectMapper() {
-        return new ObjectMapper();
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        SimpleModule moneyModule = new SimpleModule();
+        moneyModule.addSerializer(Money.class, new MoneyJsonSerializer());
+        mapper.registerModule(moneyModule);
+        return mapper;
     }
 }

@@ -1,8 +1,10 @@
 package ru.stepanov.selfcontrol.identity;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 import ru.stepanov.selfcontrol.audit.AuditService;
 import ru.stepanov.selfcontrol.security.TokenService;
 
@@ -27,7 +29,9 @@ public class AuthService {
 
     @Transactional
     public AuthResponse register(RegisterRequest r) {
-        if (users.existsByEmail_Value(r.email())) throw new IllegalArgumentException("Email already registered");
+        if (users.existsByEmail_Value(r.email())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Email already registered");
+        }
         User u = new User();
         u.setEmail(new Email(r.email()));
         u.setPhoneNumber(new PhoneNumber(r.phoneNumber()));
