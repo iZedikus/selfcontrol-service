@@ -1,12 +1,10 @@
 openapi: 3.0.3
 
 info:
-  title: "IS — Система безакцептных списаний"
+  title: "Информационная система по анализу истории покупок пользователя и произведению безакцепных списаний"
   version: "1.0.0"
   description: |
-    REST API информационной системы (IS) по REST_КОНТРАКТ.yaml.
-    Секции [IS / Auth], [IS / Accounts], [IS / Consents], [IS / Scenarios],
-    [IS / Executions], [IS / Notifications], [IS / Admin].
+    API для управления регистрацией/авторизацией пользователя, выдачей ПДА, подключением и настройкой сценариев
 
 servers:
   - url: "http://localhost:8080"
