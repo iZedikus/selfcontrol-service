@@ -13,7 +13,7 @@ public class UserScenario {
     private UUID userScenarioId;
     @Column(nullable = false)
     private UUID userId;
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "template_id")
     private ScenarioTemplate template;
     private boolean active;
