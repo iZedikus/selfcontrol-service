@@ -50,7 +50,7 @@ public class ScenarioService {
     }
 
     public List<UserScenario> list(UUID userId) {
-        return scenarios.findByUserId(userId);
+        return scenarios.findByUserIdAndActiveTrue(userId);
     }
 
     @Transactional
