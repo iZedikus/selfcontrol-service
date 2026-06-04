@@ -18,10 +18,10 @@ public class UndesirablePurchaseConfig {
     private MatchMode matchMode;
     private Instant createdAt;
     private Instant updatedAt;
-    @ElementCollection
+    @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "undesirable_config_mccs", joinColumns = @JoinColumn(name = "config_id"))
     private List<MCC> mccs = new ArrayList<>();
-    @OneToMany(mappedBy = "config", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToMany(mappedBy = "config", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
     private List<MerchantRule> merchantRules = new ArrayList<>();
 
     @PrePersist
