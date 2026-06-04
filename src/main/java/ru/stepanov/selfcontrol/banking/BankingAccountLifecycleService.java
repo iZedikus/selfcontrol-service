@@ -39,10 +39,12 @@ public class BankingAccountLifecycleService {
         validateLinkRequest(request);
         String paymentToken = request.paymentToken().trim();
 
-        SimulacrumClient.Account externalAccount = simulacrum.getAccounts(userId).stream()
-                .filter(account -> paymentToken.equals(account.accountId()) || paymentToken.equals(account.paymentToken()))
-                .findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "Account is not available in Simulacrum"));
+        SimulacrumClient.Account externalAccount;
+        try {
+            externalAccount = simulacrum.getAccount(paymentToken);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Account is not available in Simulacrum: " + paymentToken);
+        }
 
         LinkedAccount account = accounts.findByUserIdAndExternalAccountId(userId, externalAccount.accountId())
                 .orElseGet(LinkedAccount::new);

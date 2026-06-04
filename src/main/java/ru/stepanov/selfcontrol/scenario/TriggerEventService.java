@@ -1,5 +1,7 @@
 package ru.stepanov.selfcontrol.scenario;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +21,7 @@ import java.util.UUID;
 
 @Service
 public class TriggerEventService {
+    private static final Logger log = LoggerFactory.getLogger(TriggerEventService.class);
     private final ScenarioExecutionRepository executions;
     private final UserScenarioRepository scenarios;
     private final LinkedAccountRepository linkedAccounts;
@@ -48,7 +51,13 @@ public class TriggerEventService {
         if (executions.existsByTriggerEventId(m.triggerEventId())) {
             return null;
         }
-        UserScenario us = scenarios.findById(m.externalUserScenarioId()).orElseThrow();
+        UserScenario us = scenarios.findById(m.externalUserScenarioId()).orElse(null);
+        if (us == null) {
+            log.warn("UserScenario not found for externalUserScenarioId={}, skipping trigger event. " +
+                    "Scenario may have been deactivated between Oracle publish and IS processing. triggerEventId={}",
+                    m.externalUserScenarioId(), m.triggerEventId());
+            return null;
+        }
         ScenarioExecution e = new ScenarioExecution();
         e.setTriggerEventId(m.triggerEventId());
         e.setUserScenarioId(m.externalUserScenarioId());

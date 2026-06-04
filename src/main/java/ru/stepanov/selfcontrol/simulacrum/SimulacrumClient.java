@@ -63,10 +63,12 @@ public class SimulacrumClient {
     }
 
     /**
-     * Внутренний вызов (привязка счёта через Simulacrum). Не является публичным API IS.
+     * Получить счёт из Симулякра по contract-endpoint GET /api/v1/accounts/{accountId}.
+     * paymentToken в IS == accountId в Симулякре (REST_КОНТРАКТ.yaml, is_LinkAccount.paymentToken).
      */
-    public List<Account> getAccounts(UUID userId) {
-        return parseAccounts(call("GET", "/api/v1/users/" + userId + "/accounts", null, OPERATION_GET_ACCOUNTS, userId));
+    public Account getAccount(String accountId) {
+        String response = call("GET", "/api/v1/accounts/" + accountId, null, OPERATION_GET_ACCOUNTS, null);
+        return parseAccount(response);
     }
 
     public GrantConsentResponse grantConsent(UUID userId, RegisterConsentRequest request) {
@@ -112,18 +114,14 @@ public class SimulacrumClient {
         );
     }
 
-    private List<Account> parseAccounts(String response) {
+    private Account parseAccount(String response) {
         try {
-            JsonNode root = objectMapper.readTree(response == null || response.isBlank() ? "[]" : response);
-            JsonNode accounts = root.isArray() ? root : firstExisting(root, "accounts", "items", "data");
-            if (accounts == null || !accounts.isArray()) {
-                return List.of();
-            }
-            List<Map<String, Object>> rawAccounts = objectMapper.convertValue(accounts, new TypeReference<>() {
+            JsonNode root = objectMapper.readTree(response == null || response.isBlank() ? "{}" : response);
+            Map<String, Object> rawAccount = objectMapper.convertValue(root, new TypeReference<>() {
             });
-            return rawAccounts.stream().map(this::toAccount).toList();
+            return toAccount(rawAccount);
         } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Simulacrum accounts response is not valid JSON", e);
+            throw new IllegalStateException("Simulacrum account response is not valid JSON", e);
         }
     }
 
