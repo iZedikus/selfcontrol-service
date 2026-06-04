@@ -55,7 +55,7 @@ public class BankingAccountLifecycleService {
         account.setCurrency(toCurrency(request.currency()));
         account.setBankBIC(new BankBIC(request.bankBic().trim()));
         account.setBankName(blankToNull(externalAccount.bank()));
-        account.setPaymentToken(toPaymentToken(externalAccount));
+        account.setPaymentToken(new PaymentToken(paymentToken));
         account.setStatus(toStatus(externalAccount.status()));
         account.setExpiresAt(null);
         LinkedAccount saved = accounts.save(account);
@@ -117,10 +117,6 @@ public class BankingAccountLifecycleService {
     private BankBIC toBankBIC(SimulacrumClient.Account account) {
         String bankBic = blankToNull(account.bankBic());
         return bankBic == null ? null : new BankBIC(bankBic);
-    }
-
-    private PaymentToken toPaymentToken(SimulacrumClient.Account account) {
-        return account.paymentToken() == null || account.paymentToken().isBlank() ? null : new PaymentToken(account.paymentToken());
     }
 
     private LinkedAccountStatus toStatus(String value) {

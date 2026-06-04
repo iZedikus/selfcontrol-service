@@ -41,7 +41,7 @@ public final class ScenarioProfileSyncSupport {
                 scenario.getUserId(),
                 scenario.getUserScenarioId(),
                 UndesirablePurchasePlugin.SCENARIO_TYPE_CODE,
-                account == null ? null : account.getPaymentToken().getValue(),
+                account == null || account.getPaymentToken() == null ? null : account.getPaymentToken().getValue(),
                 account == null || account.getBankBIC() == null ? null : account.getBankBIC().getValue(),
                 config.getVersion(),
                 plugin.buildOracleRules(config),
